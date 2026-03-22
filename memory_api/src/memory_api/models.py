@@ -39,6 +39,7 @@ class MemorySearchRequest(BaseModel):
     kind: MemoryKind | None = None
     tags: list[str] = Field(default_factory=list)
     include_archived: bool = False
+    exclude_superseded: bool = False
     limit: int = Field(default=10, ge=1, le=100)
 
     @field_validator("query")

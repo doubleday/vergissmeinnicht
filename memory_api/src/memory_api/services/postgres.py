@@ -216,6 +216,20 @@ class PostgresStore:
             params.append(Jsonb(request.tags))
         if not request.include_archived:
             filters.append(sql.SQL("archived = FALSE"))
+        if request.exclude_superseded:
+            filters.append(
+                sql.SQL(
+                    """
+                    NOT EXISTS (
+                        SELECT 1
+                        FROM memories AS superseding
+                        WHERE superseding.supersedes_memory_id = memories.id
+                          AND superseding.namespace = memories.namespace
+                          AND superseding.archived = FALSE
+                    )
+                    """
+                )
+            )
         if request.query:
             filters.append(sql.SQL("(title ILIKE %s OR content ILIKE %s)"))
             pattern = f"%{request.query}%"

@@ -89,8 +89,33 @@ class FakePostgresStore:
         self.stored_memories[memory_id] = archived_memory
         return archived_memory
 
-    def search(self, request: object, *, update_access_time: bool = False) -> list[MemoryRecord]:
+    def search(self, request: MemorySearchRequest, *, update_access_time: bool = False) -> list[MemoryRecord]:
         memories = list(self.stored_memories.values())
+        if request.namespace is not None:
+            memories = [memory for memory in memories if memory.namespace == request.namespace]
+        if request.scope is not None:
+            memories = [memory for memory in memories if memory.scope == request.scope]
+        if request.kind is not None:
+            memories = [memory for memory in memories if memory.kind == request.kind]
+        if request.tags:
+            memories = [memory for memory in memories if all(tag in memory.tags for tag in request.tags)]
+        if not request.include_archived:
+            memories = [memory for memory in memories if not memory.archived]
+        if request.query is not None:
+            needle = request.query.casefold()
+            memories = [
+                memory
+                for memory in memories
+                if needle in memory.title.casefold() or needle in memory.content.casefold()
+            ]
+        if request.exclude_superseded:
+            superseded_keys = {
+                (memory.namespace, memory.supersedes_memory_id)
+                for memory in self.stored_memories.values()
+                if memory.supersedes_memory_id is not None and not memory.archived
+            }
+            memories = [memory for memory in memories if (memory.namespace, memory.id) not in superseded_keys]
+        memories = memories[: request.limit]
         if not update_access_time:
             return memories
         accessed_at = utcnow()
@@ -268,6 +293,77 @@ def test_search_advances_last_accessed_at_for_returned_memories() -> None:
     assert returned.id == existing.id
     assert returned.last_accessed_at >= existing.last_accessed_at
     assert returned.updated_at == existing.updated_at
+
+
+def test_search_preserves_superseded_memories_by_default() -> None:
+    prior_request = build_create_request(title="Original rule")
+    prior = build_memory_record("prior-memory", prior_request)
+    newer_request = build_create_request(title="Replacement rule", supersedes_memory_id=prior.id)
+    newer = build_memory_record("newer-memory", newer_request)
+    postgres = FakePostgresStore(stored_memories={prior.id: prior, newer.id: newer})
+    service = MemoryService(postgres=postgres, qdrant=FakeQdrantStore(), embedder=DeterministicEmbedder(8))
+
+    response = service.search(MemorySearchRequest())
+
+    assert {memory.id for memory in response.results} == {prior.id, newer.id}
+
+
+def test_search_can_exclude_superseded_memories() -> None:
+    prior_request = build_create_request(title="Original rule")
+    prior = build_memory_record("prior-memory", prior_request)
+    newer_request = build_create_request(title="Replacement rule", supersedes_memory_id=prior.id)
+    newer = build_memory_record("newer-memory", newer_request)
+    postgres = FakePostgresStore(stored_memories={prior.id: prior, newer.id: newer})
+    service = MemoryService(postgres=postgres, qdrant=FakeQdrantStore(), embedder=DeterministicEmbedder(8))
+
+    response = service.search(MemorySearchRequest(exclude_superseded=True))
+
+    assert [memory.id for memory in response.results] == [newer.id]
+
+
+def test_search_keeps_prior_memory_visible_when_only_archived_superseder_exists() -> None:
+    prior_request = build_create_request(title="Original rule")
+    prior = build_memory_record("prior-memory", prior_request)
+    newer_request = build_create_request(title="Replacement rule", supersedes_memory_id=prior.id)
+    archived_newer = build_memory_record("newer-memory", newer_request, archived=True)
+    postgres = FakePostgresStore(stored_memories={prior.id: prior, archived_newer.id: archived_newer})
+    service = MemoryService(postgres=postgres, qdrant=FakeQdrantStore(), embedder=DeterministicEmbedder(8))
+
+    response = service.search(MemorySearchRequest(exclude_superseded=True))
+
+    assert [memory.id for memory in response.results] == [prior.id]
+
+
+def test_archive_of_superseding_memory_does_not_cascade() -> None:
+    prior_request = build_create_request(title="Original rule")
+    prior = build_memory_record("prior-memory", prior_request)
+    newer_request = build_create_request(title="Replacement rule", supersedes_memory_id=prior.id)
+    newer = build_memory_record("newer-memory", newer_request)
+    postgres = FakePostgresStore(stored_memories={prior.id: prior, newer.id: newer})
+    service = MemoryService(postgres=postgres, qdrant=FakeQdrantStore(), embedder=DeterministicEmbedder(8))
+
+    archived = service.archive_memory(newer.id)
+
+    assert archived is not None
+    assert archived.archived is True
+    assert postgres.stored_memories[prior.id].archived is False
+    assert postgres.stored_memories[prior.id].supersedes_memory_id is None
+
+
+def test_archive_of_superseded_memory_does_not_cascade() -> None:
+    prior_request = build_create_request(title="Original rule")
+    prior = build_memory_record("prior-memory", prior_request)
+    newer_request = build_create_request(title="Replacement rule", supersedes_memory_id=prior.id)
+    newer = build_memory_record("newer-memory", newer_request)
+    postgres = FakePostgresStore(stored_memories={prior.id: prior, newer.id: newer})
+    service = MemoryService(postgres=postgres, qdrant=FakeQdrantStore(), embedder=DeterministicEmbedder(8))
+
+    archived = service.archive_memory(prior.id)
+
+    assert archived is not None
+    assert archived.archived is True
+    assert postgres.stored_memories[newer.id].archived is False
+    assert postgres.stored_memories[newer.id].supersedes_memory_id == prior.id
 
 
 def test_archive_preserves_last_accessed_at() -> None:
