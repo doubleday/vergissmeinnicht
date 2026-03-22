@@ -11,6 +11,10 @@ from psycopg.types.json import Jsonb
 from memory_api.models import MemoryCreate, MemoryRecord, MemorySearchRequest, utcnow
 
 
+def normalize_duplicate_text(value: str) -> str:
+    return value.strip()
+
+
 class PostgresStore:
     def __init__(self, dsn: str) -> None:
         self.dsn = dsn
@@ -78,6 +82,39 @@ class PostgresStore:
                 )
                 row = cur.fetchone()
             conn.commit()
+        return MemoryRecord.model_validate(row)
+
+    def find_active_duplicate_memory(self, request: MemoryCreate) -> MemoryRecord | None:
+        normalized_title = normalize_duplicate_text(request.title)
+        normalized_content = normalize_duplicate_text(request.content)
+
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM memories
+                    WHERE namespace = %s
+                      AND scope = %s
+                      AND kind = %s
+                      AND archived = FALSE
+                      AND btrim(title) = %s
+                      AND btrim(content) = %s
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                    """,
+                    (
+                        request.namespace,
+                        request.scope,
+                        request.kind,
+                        normalized_title,
+                        normalized_content,
+                    ),
+                )
+                row = cur.fetchone()
+
+        if row is None:
+            return None
         return MemoryRecord.model_validate(row)
 
     def get_memory(self, memory_id: str) -> MemoryRecord | None:

@@ -1,18 +1,33 @@
 from __future__ import annotations
 
+from typing import Protocol
 from uuid import uuid4
 
 from memory_api.models import MemoryCreate, MemoryRecord, MemorySearchRequest, SearchResponse
 from memory_api.services.embedding import DeterministicEmbedder
-from memory_api.services.postgres import PostgresStore
-from memory_api.services.qdrant_store import QdrantStore
+
+
+class PostgresStoreLike(Protocol):
+    def init(self) -> None: ...
+    def ping(self) -> None: ...
+    def find_active_duplicate_memory(self, request: MemoryCreate) -> MemoryRecord | None: ...
+    def create_memory(self, memory_id: str, request: MemoryCreate) -> MemoryRecord: ...
+    def get_memory(self, memory_id: str) -> MemoryRecord | None: ...
+    def archive_memory(self, memory_id: str) -> MemoryRecord | None: ...
+    def search(self, request: MemorySearchRequest) -> list[MemoryRecord]: ...
+
+
+class QdrantStoreLike(Protocol):
+    def init(self) -> None: ...
+    def ping(self) -> None: ...
+    def upsert_memory(self, memory: MemoryRecord, vector: list[float]) -> None: ...
 
 
 class MemoryService:
     def __init__(
         self,
-        postgres: PostgresStore,
-        qdrant: QdrantStore,
+        postgres: PostgresStoreLike,
+        qdrant: QdrantStoreLike,
         embedder: DeterministicEmbedder,
     ) -> None:
         self.postgres = postgres
@@ -38,6 +53,10 @@ class MemoryService:
         return checks
 
     def create_memory(self, request: MemoryCreate) -> MemoryRecord:
+        existing_memory = self.postgres.find_active_duplicate_memory(request)
+        if existing_memory is not None:
+            return existing_memory
+
         memory = self.postgres.create_memory(str(uuid4()), request)
         self.qdrant.upsert_memory(memory, self.embedder.embed(memory.content))
         return memory
