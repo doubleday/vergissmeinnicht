@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Protocol
 from uuid import uuid4
 
+from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
+
 from memory_api.models import MemoryCreate, MemoryRecord, MemorySearchRequest, SearchResponse
 from memory_api.services.embedding import DeterministicEmbedder
 
@@ -99,12 +101,16 @@ class MemoryService:
         if request.query is None:
             return SearchResponse(results=self.postgres.search(request, update_access_time=True))
 
-        candidates = self.qdrant.search_memory_candidates(
-            self.embedder.embed(request.query),
-            limit=min(request.limit * 5, 500),
-        )
+        query_vector = self.embedder.embed(request.query)
+        try:
+            candidates = self.qdrant.search_memory_candidates(
+                query_vector,
+                limit=min(request.limit * 5, 500),
+            )
+        except (ResponseHandlingException, UnexpectedResponse):
+            candidates = []
         if not candidates:
-            return SearchResponse(results=[])
+            return SearchResponse(results=self.postgres.search(request, update_access_time=True))
         score_by_id = {memory_id: score for memory_id, score in candidates}
         results = self.postgres.search(
             request,

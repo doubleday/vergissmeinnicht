@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import timedelta
 
+from qdrant_client.http.exceptions import ResponseHandlingException
+
 from memory_api.models import MemoryCreate, MemoryRecord, MemorySearchRequest, utcnow
 from memory_api.services.embedding import DeterministicEmbedder
 from memory_api.services.memory_service import MemoryService
@@ -46,6 +48,11 @@ def build_memory_record(memory_id: str, request: MemoryCreate, *, archived: bool
             "archived": archived,
         }
     )
+
+
+class ExplodingEmbedder:
+    def embed(self, value: str) -> list[float]:
+        raise RuntimeError(f"embed failed for {value}")
 
 
 @dataclass
@@ -166,6 +173,7 @@ class FakeQdrantStore:
     search_results: list[str] = field(default_factory=list)
     search_scores: dict[str, float] = field(default_factory=dict)
     search_calls: list[tuple[list[float], int]] = field(default_factory=list)
+    search_error: Exception | None = None
 
     def init(self) -> None:
         return None
@@ -175,6 +183,8 @@ class FakeQdrantStore:
 
     def search_memory_candidates(self, vector: list[float], *, limit: int) -> list[tuple[str, float]]:
         self.search_calls.append((vector, limit))
+        if self.search_error is not None:
+            raise self.search_error
         limited_ids = self.search_results[:limit]
         default_scores = {memory_id: float(len(limited_ids) - index) for index, memory_id in enumerate(limited_ids)}
         return [(memory_id, self.search_scores.get(memory_id, default_scores[memory_id])) for memory_id in limited_ids]
@@ -552,18 +562,53 @@ def test_query_present_search_uses_updated_at_then_id_to_break_semantic_ties() -
     assert [memory.id for memory in response.results] == [newer.id, alpha.id, beta.id]
 
 
-def test_query_present_search_returns_empty_when_qdrant_has_no_candidates() -> None:
-    semantic_match = build_memory_record(
-        "semantic-memory",
-        build_create_request(title="Concise writing guidance", content="Prefer direct answers."),
+def test_query_present_search_falls_back_to_lexical_matching_when_qdrant_has_no_candidates() -> None:
+    lexical_match = build_memory_record(
+        "lexical-memory",
+        build_create_request(title="Semantic fallback note", content="Prefer direct answers."),
     )
-    postgres = FakePostgresStore(stored_memories={semantic_match.id: semantic_match})
+    postgres = FakePostgresStore(stored_memories={lexical_match.id: lexical_match})
     qdrant = FakeQdrantStore(search_results=[])
     service = MemoryService(postgres=postgres, qdrant=qdrant, embedder=DeterministicEmbedder(8))
 
-    response = service.search(MemorySearchRequest(query="semantic"))
+    response = service.search(MemorySearchRequest(query="fallback"))
 
-    assert response.results == []
+    assert [memory.id for memory in response.results] == [lexical_match.id]
+    assert response.results[0].last_accessed_at >= lexical_match.last_accessed_at
+
+
+def test_query_present_search_falls_back_to_lexical_matching_when_qdrant_search_errors() -> None:
+    lexical_match = build_memory_record(
+        "lexical-memory",
+        build_create_request(title="Fallback on qdrant error", content="Prefer direct answers."),
+    )
+    postgres = FakePostgresStore(stored_memories={lexical_match.id: lexical_match})
+    qdrant = FakeQdrantStore(search_error=ResponseHandlingException(RuntimeError("qdrant unavailable")))
+    service = MemoryService(postgres=postgres, qdrant=qdrant, embedder=DeterministicEmbedder(8))
+
+    response = service.search(MemorySearchRequest(query="fallback"))
+
+    assert [memory.id for memory in response.results] == [lexical_match.id]
+    assert len(qdrant.search_calls) == 1
+
+
+def test_query_present_search_does_not_swallow_embedder_failures() -> None:
+    lexical_match = build_memory_record(
+        "lexical-memory",
+        build_create_request(title="Fallback on embedder error", content="Prefer direct answers."),
+    )
+    postgres = FakePostgresStore(stored_memories={lexical_match.id: lexical_match})
+    qdrant = FakeQdrantStore()
+    service = MemoryService(postgres=postgres, qdrant=qdrant, embedder=ExplodingEmbedder())  # type: ignore[arg-type]
+
+    try:
+        service.search(MemorySearchRequest(query="fallback"))
+    except RuntimeError as exc:
+        assert str(exc) == "embed failed for fallback"
+    else:
+        raise AssertionError("Expected embedder failure to propagate")
+
+    assert qdrant.search_calls == []
 
 
 def test_search_without_query_uses_updated_at_then_id_ordering() -> None:
