@@ -23,8 +23,9 @@ Archive a completed change in the experimental workflow.
    Include the schema used for each change if available.
 
    **IMPORTANT**:
+   - Follow the repo-local [`openspec-select-change`](/Users/daniel/Source/myprojects/ai/vergissmeinnicht/.codex/skills/openspec-select-change/SKILL.md) helper behavior.
    - If exactly one active change is available, auto-select it and announce the selection.
-   - If multiple active changes are available, use the **AskUserQuestion tool** to let the user choose.
+   - If multiple active changes are available, use the **AskUserQuestion tool** when supported; otherwise present a short numbered list in plain text and accept either the number or the exact change name.
    - If no active changes are available, report that and stop.
 
 2. **Check artifact completion status**

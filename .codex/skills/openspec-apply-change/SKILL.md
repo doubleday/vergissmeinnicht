@@ -20,7 +20,7 @@ Implement tasks from an OpenSpec change.
    If a name is provided, use it. Otherwise:
    - Infer from conversation context if the user mentioned a change
    - Auto-select if only one active change exists
-   - If ambiguous, run `openspec list --json` to get available changes and use the **AskUserQuestion tool** to let the user select
+   - If ambiguous, follow the repo-local [`openspec-select-change`](/Users/daniel/Source/myprojects/ai/vergissmeinnicht/.codex/skills/openspec-select-change/SKILL.md) helper behavior: use the **AskUserQuestion tool** when supported, otherwise present a short numbered list in plain text and accept either the number or the exact change name
 
    Always announce: "Using change: <name>" and how to override (e.g., `/opsx:apply <other>`).
 
