@@ -12,9 +12,9 @@ class PostgresStoreLike(Protocol):
     def ping(self) -> None: ...
     def find_active_duplicate_memory(self, request: MemoryCreate) -> MemoryRecord | None: ...
     def create_memory(self, memory_id: str, request: MemoryCreate) -> MemoryRecord: ...
-    def get_memory(self, memory_id: str) -> MemoryRecord | None: ...
+    def get_memory(self, memory_id: str, *, update_access_time: bool = False) -> MemoryRecord | None: ...
     def archive_memory(self, memory_id: str) -> MemoryRecord | None: ...
-    def search(self, request: MemorySearchRequest) -> list[MemoryRecord]: ...
+    def search(self, request: MemorySearchRequest, *, update_access_time: bool = False) -> list[MemoryRecord]: ...
 
 
 class QdrantStoreLike(Protocol):
@@ -62,7 +62,7 @@ class MemoryService:
         return memory
 
     def get_memory(self, memory_id: str) -> MemoryRecord | None:
-        return self.postgres.get_memory(memory_id)
+        return self.postgres.get_memory(memory_id, update_access_time=True)
 
     def archive_memory(self, memory_id: str) -> MemoryRecord | None:
         memory = self.postgres.archive_memory(memory_id)
@@ -72,4 +72,4 @@ class MemoryService:
         return memory
 
     def search(self, request: MemorySearchRequest) -> SearchResponse:
-        return SearchResponse(results=self.postgres.search(request))
+        return SearchResponse(results=self.postgres.search(request, update_access_time=True))

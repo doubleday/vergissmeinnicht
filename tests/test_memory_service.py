@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from memory_api.models import MemoryCreate, MemoryRecord, utcnow
+from memory_api.models import MemoryCreate, MemoryRecord, MemorySearchRequest, utcnow
 from memory_api.services.embedding import DeterministicEmbedder
 from memory_api.services.memory_service import MemoryService
 from memory_api.services.postgres import normalize_duplicate_text
@@ -40,6 +40,7 @@ def build_memory_record(memory_id: str, request: MemoryCreate, *, archived: bool
             "metadata": request.metadata,
             "created_at": now,
             "updated_at": now,
+            "last_accessed_at": now,
             "archived": archived,
         }
     )
@@ -69,8 +70,15 @@ class FakePostgresStore:
         self.stored_memories[memory.id] = memory
         return memory
 
-    def get_memory(self, memory_id: str) -> MemoryRecord | None:
-        return self.stored_memories.get(memory_id)
+    def get_memory(self, memory_id: str, *, update_access_time: bool = False) -> MemoryRecord | None:
+        memory = self.stored_memories.get(memory_id)
+        if memory is None:
+            return None
+        if not update_access_time:
+            return memory
+        accessed_memory = memory.model_copy(update={"last_accessed_at": utcnow()})
+        self.stored_memories[memory_id] = accessed_memory
+        return accessed_memory
 
     def archive_memory(self, memory_id: str) -> MemoryRecord | None:
         memory = self.stored_memories.get(memory_id)
@@ -80,8 +88,17 @@ class FakePostgresStore:
         self.stored_memories[memory_id] = archived_memory
         return archived_memory
 
-    def search(self, request: object) -> list[MemoryRecord]:
-        return list(self.stored_memories.values())
+    def search(self, request: object, *, update_access_time: bool = False) -> list[MemoryRecord]:
+        memories = list(self.stored_memories.values())
+        if not update_access_time:
+            return memories
+        accessed_at = utcnow()
+        updated_memories: list[MemoryRecord] = []
+        for memory in memories:
+            accessed_memory = memory.model_copy(update={"last_accessed_at": accessed_at})
+            self.stored_memories[memory.id] = accessed_memory
+            updated_memories.append(accessed_memory)
+        return updated_memories
 
 
 @dataclass
@@ -111,6 +128,7 @@ def test_create_memory_inserts_new_record_when_no_active_duplicate_exists() -> N
     assert len(postgres.create_calls) == 1
     assert len(qdrant.upserts) == 1
     assert qdrant.upserts[0][0].id == created.id
+    assert created.last_accessed_at == created.created_at
 
 
 def test_create_memory_returns_existing_record_for_duplicate_active_write() -> None:
@@ -125,6 +143,7 @@ def test_create_memory_returns_existing_record_for_duplicate_active_write() -> N
     assert returned.id == "existing-memory"
     assert postgres.create_calls == []
     assert qdrant.upserts == []
+    assert returned.last_accessed_at == existing.last_accessed_at
 
 
 def test_archived_match_does_not_block_new_write() -> None:
@@ -140,6 +159,48 @@ def test_archived_match_does_not_block_new_write() -> None:
     assert returned.id == "new-memory"
     assert len(postgres.create_calls) == 1
     assert len(qdrant.upserts) == 1
+
+
+def test_get_memory_advances_last_accessed_at_for_existing_memory() -> None:
+    request = build_create_request()
+    existing = build_memory_record("existing-memory", request)
+    postgres = FakePostgresStore(stored_memories={existing.id: existing})
+    service = MemoryService(postgres=postgres, qdrant=FakeQdrantStore(), embedder=DeterministicEmbedder(8))
+
+    returned = service.get_memory(existing.id)
+
+    assert returned is not None
+    assert returned.id == existing.id
+    assert returned.last_accessed_at >= existing.last_accessed_at
+    assert returned.updated_at == existing.updated_at
+
+
+def test_search_advances_last_accessed_at_for_returned_memories() -> None:
+    request = build_create_request()
+    existing = build_memory_record("existing-memory", request)
+    postgres = FakePostgresStore(stored_memories={existing.id: existing})
+    service = MemoryService(postgres=postgres, qdrant=FakeQdrantStore(), embedder=DeterministicEmbedder(8))
+
+    response = service.search(MemorySearchRequest())
+
+    assert len(response.results) == 1
+    returned = response.results[0]
+    assert returned.id == existing.id
+    assert returned.last_accessed_at >= existing.last_accessed_at
+    assert returned.updated_at == existing.updated_at
+
+
+def test_archive_preserves_last_accessed_at() -> None:
+    request = build_create_request()
+    existing = build_memory_record("existing-memory", request)
+    postgres = FakePostgresStore(stored_memories={existing.id: existing})
+    service = MemoryService(postgres=postgres, qdrant=FakeQdrantStore(), embedder=DeterministicEmbedder(8))
+
+    archived = service.archive_memory(existing.id)
+
+    assert archived is not None
+    assert archived.archived is True
+    assert archived.last_accessed_at == existing.last_accessed_at
 
 
 def test_normalize_duplicate_text_trims_whitespace() -> None:

@@ -22,6 +22,7 @@ The canonical memory record MUST contain:
 - `metadata`: a free-form object for client-supplied structured metadata
 - `created_at`: the creation timestamp
 - `updated_at`: the most recent mutation timestamp
+- `last_accessed_at`: the most recent observed access timestamp
 - `archived`: a lifecycle flag indicating whether the memory is archived
 
 #### Scenario: Return a canonical memory record after create
@@ -29,7 +30,7 @@ The canonical memory record MUST contain:
 - **WHEN** a client submits a valid create-memory request
 - **THEN** the system returns the created memory in the canonical representation
 - **AND** the response includes a service-generated `id`
-- **AND** the response includes `created_at`, `updated_at`, and `archived`
+- **AND** the response includes `created_at`, `updated_at`, `last_accessed_at`, and `archived`
 
 #### Scenario: Reject a create request missing canonical required fields
 
@@ -117,6 +118,31 @@ The create operation MUST incorporate duplicate checks defined by the duplicate-
 - **WHEN** a client submits a create-memory request without `source.type`
 - **THEN** the system rejects the request with a validation error
 
+### Requirement: Track Last Memory Access Time
+
+The system MUST track the most recent observed access time for each canonical memory record using `last_accessed_at`.
+
+The canonical memory record MUST include `last_accessed_at` as a timestamp.
+
+The system MUST initialize `last_accessed_at` when a new memory is created.
+
+#### Scenario: Return `last_accessed_at` in the canonical record
+
+- **WHEN** a client creates, fetches, searches, or archives a memory
+- **THEN** the returned canonical memory representation includes `last_accessed_at`
+
+#### Scenario: Initialize `last_accessed_at` at creation
+
+- **WHEN** a client submits a valid create-memory request that produces a new canonical memory record
+- **THEN** the system sets `last_accessed_at` on that new record
+- **AND** the returned canonical memory includes the initialized timestamp
+
+#### Scenario: Preserve `last_accessed_at` for duplicate create responses
+
+- **WHEN** a client submits a create-memory request that resolves to an existing active memory under the duplicate-write rule
+- **THEN** the system returns the existing canonical memory record
+- **AND** the duplicate-write response does not require advancing `last_accessed_at`
+
 ### Requirement: Prevent Duplicate Active Memory Writes
 
 The system MUST prevent duplicate create requests from producing multiple active canonical memory records when the requests are equivalent within the same namespace.
@@ -152,11 +178,13 @@ The system MUST provide a search operation that returns relevant non-archived me
 - **WHEN** a client searches using query text plus namespace and scope filters
 - **THEN** the system returns only memories matching the provided filters
 - **AND** archived memories are excluded from results by default
+- **AND** each returned memory includes an updated `last_accessed_at` value for that search response
 
 #### Scenario: Search with archived memories explicitly included
 
 - **WHEN** a client searches with an explicit request to include archived memories
 - **THEN** the system may return both active and archived memories that match the query and filters
+- **AND** each returned memory includes an updated `last_accessed_at` value for that search response
 
 #### Scenario: Search an empty store
 
@@ -177,6 +205,7 @@ The system MUST provide an operation that returns the canonical representation o
 - **WHEN** a client requests an existing memory identifier
 - **THEN** the system returns the canonical memory record including lifecycle fields and metadata
 - **AND** the returned record preserves the current archived state
+- **AND** the returned record includes the updated `last_accessed_at` value for that fetch
 
 #### Scenario: Fetch a missing memory
 
@@ -193,6 +222,7 @@ The system MUST support archiving a memory without deleting its canonical histor
 - **THEN** the system marks the memory as archived
 - **AND** the system preserves the original identifier and canonical content
 - **AND** the system updates the memory's lifecycle state for later fetch operations
+- **AND** the archive response preserves the current `last_accessed_at` value unless a prior read in the same request path changed it
 - **AND** subsequent default search results exclude that memory
 
 #### Scenario: Archive a missing memory

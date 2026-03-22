@@ -27,6 +27,7 @@ class MemoryRecord(MemoryCreate):
     id: str
     created_at: datetime
     updated_at: datetime
+    last_accessed_at: datetime
     archived: bool = False
 
 

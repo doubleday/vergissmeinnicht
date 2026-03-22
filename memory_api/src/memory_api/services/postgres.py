@@ -40,8 +40,28 @@ class PostgresStore:
                         metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
                         created_at TIMESTAMPTZ NOT NULL,
                         updated_at TIMESTAMPTZ NOT NULL,
+                        last_accessed_at TIMESTAMPTZ,
                         archived BOOLEAN NOT NULL DEFAULT FALSE
                     )
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE memories
+                    ADD COLUMN IF NOT EXISTS last_accessed_at TIMESTAMPTZ
+                    """
+                )
+                cur.execute(
+                    """
+                    UPDATE memories
+                    SET last_accessed_at = created_at
+                    WHERE last_accessed_at IS NULL
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE memories
+                    ALTER COLUMN last_accessed_at SET NOT NULL
                     """
                 )
             conn.commit()
@@ -60,9 +80,9 @@ class PostgresStore:
                     """
                     INSERT INTO memories (
                         id, kind, scope, namespace, title, content, tags, source,
-                        confidence, metadata, created_at, updated_at, archived
+                        confidence, metadata, created_at, updated_at, last_accessed_at, archived
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE)
                     RETURNING *
                     """,
                     (
@@ -76,6 +96,7 @@ class PostgresStore:
                         Jsonb(request.source.model_dump()),
                         request.confidence,
                         Jsonb(request.metadata),
+                        now,
                         now,
                         now,
                     ),
@@ -117,11 +138,24 @@ class PostgresStore:
             return None
         return MemoryRecord.model_validate(row)
 
-    def get_memory(self, memory_id: str) -> MemoryRecord | None:
+    def get_memory(self, memory_id: str, *, update_access_time: bool = False) -> MemoryRecord | None:
         with self.connect() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT * FROM memories WHERE id = %s", (memory_id,))
+                if update_access_time:
+                    cur.execute(
+                        """
+                        UPDATE memories
+                        SET last_accessed_at = %s
+                        WHERE id = %s
+                        RETURNING *
+                        """,
+                        (utcnow(), memory_id),
+                    )
+                else:
+                    cur.execute("SELECT * FROM memories WHERE id = %s", (memory_id,))
                 row = cur.fetchone()
+            if update_access_time and row is not None:
+                conn.commit()
         if row is None:
             return None
         return MemoryRecord.model_validate(row)
@@ -145,7 +179,13 @@ class PostgresStore:
             return None
         return MemoryRecord.model_validate(row)
 
-    def search(self, request: MemorySearchRequest, ids: Iterable[str] | None = None) -> list[MemoryRecord]:
+    def search(
+        self,
+        request: MemorySearchRequest,
+        ids: Iterable[str] | None = None,
+        *,
+        update_access_time: bool = False,
+    ) -> list[MemoryRecord]:
         filters: list[sql.Composed] = []
         params: list[Any] = []
 
@@ -184,5 +224,21 @@ class PostgresStore:
             with conn.cursor() as cur:
                 cur.execute(query, params)
                 rows = cur.fetchall()
+                if update_access_time and rows:
+                    access_time = utcnow()
+                    memory_ids = [row["id"] for row in rows]
+                    cur.execute(
+                        """
+                        UPDATE memories
+                        SET last_accessed_at = %s
+                        WHERE id = ANY(%s)
+                        RETURNING *
+                        """,
+                        (access_time, memory_ids),
+                    )
+                    updated_rows = cur.fetchall()
+                    row_by_id = {row["id"]: row for row in updated_rows}
+                    rows = [row_by_id.get(row["id"], row) for row in rows]
+                    conn.commit()
 
         return [MemoryRecord.model_validate(row) for row in rows]
