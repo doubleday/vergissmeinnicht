@@ -23,6 +23,16 @@ class QdrantStore:
     def ping(self) -> None:
         self.client.get_collections()
 
+    def search_memory_candidates(self, vector: list[float], *, limit: int) -> list[tuple[str, float]]:
+        response = self.client.query_points(
+            collection_name=self.collection,
+            query=vector,
+            limit=limit,
+            with_payload=False,
+            with_vectors=False,
+        )
+        return [(str(point.id), point.score) for point in response.points]
+
     def upsert_memory(self, memory: MemoryRecord, vector: list[float]) -> None:
         self.client.upsert(
             collection_name=self.collection,

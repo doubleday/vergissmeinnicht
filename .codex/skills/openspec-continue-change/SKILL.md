@@ -15,9 +15,9 @@ Continue working on a change by creating the next artifact.
 
 **Steps**
 
-1. **If no change name provided, prompt for selection**
+1. **If no change name provided, resolve selection from active changes**
 
-   Run `openspec list --json` to get available changes sorted by most recently modified. Then use the **AskUserQuestion tool** to let the user select which change to work on.
+   Run `openspec list --json` to get available changes sorted by most recently modified.
 
    Present the top 3-4 most recently modified changes as options, showing:
    - Change name
@@ -27,7 +27,10 @@ Continue working on a change by creating the next artifact.
 
    Mark the most recently modified change as "(Recommended)" since it's likely what the user wants to continue.
 
-   **IMPORTANT**: Do NOT guess or auto-select a change. Always let the user choose.
+   **IMPORTANT**:
+   - If exactly one active change is available, auto-select it and announce the selection.
+   - If multiple active changes are available, use the **AskUserQuestion tool** to let the user choose.
+   - If no active changes are available, report that and stop.
 
 2. **Check current status**
    ```bash

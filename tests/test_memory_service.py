@@ -90,8 +90,24 @@ class FakePostgresStore:
         self.stored_memories[memory_id] = archived_memory
         return archived_memory
 
-    def search(self, request: MemorySearchRequest, *, update_access_time: bool = False) -> list[MemoryRecord]:
+    def search(
+        self,
+        request: MemorySearchRequest,
+        ids: list[str] | None = None,
+        *,
+        update_access_time: bool = False,
+    ) -> list[MemoryRecord]:
         memories = list(self.stored_memories.values())
+        if ids is not None:
+            order = {memory_id: index for index, memory_id in enumerate(ids)}
+            memories = [memory for memory in memories if memory.id in order]
+            memories.sort(
+                key=lambda memory: (
+                    order[memory.id],
+                    -memory.updated_at.timestamp(),
+                    memory.id,
+                )
+            )
         if request.namespace is not None:
             memories = [memory for memory in memories if memory.namespace == request.namespace]
         if request.scope is not None:
@@ -102,7 +118,7 @@ class FakePostgresStore:
             memories = [memory for memory in memories if all(tag in memory.tags for tag in request.tags)]
         if not request.include_archived:
             memories = [memory for memory in memories if not memory.archived]
-        if request.query is not None:
+        if request.query is not None and ids is None:
             needle = request.query.casefold()
             memories = [
                 memory
@@ -123,7 +139,7 @@ class FakePostgresStore:
                     memory.id,
                 )
             )
-        else:
+        elif ids is None:
             memories.sort(key=lambda memory: (-memory.updated_at.timestamp(), memory.id))
         if request.exclude_superseded:
             superseded_keys = {
@@ -147,12 +163,21 @@ class FakePostgresStore:
 @dataclass
 class FakeQdrantStore:
     upserts: list[tuple[MemoryRecord, list[float]]] = field(default_factory=list)
+    search_results: list[str] = field(default_factory=list)
+    search_scores: dict[str, float] = field(default_factory=dict)
+    search_calls: list[tuple[list[float], int]] = field(default_factory=list)
 
     def init(self) -> None:
         return None
 
     def ping(self) -> None:
         return None
+
+    def search_memory_candidates(self, vector: list[float], *, limit: int) -> list[tuple[str, float]]:
+        self.search_calls.append((vector, limit))
+        limited_ids = self.search_results[:limit]
+        default_scores = {memory_id: float(len(limited_ids) - index) for index, memory_id in enumerate(limited_ids)}
+        return [(memory_id, self.search_scores.get(memory_id, default_scores[memory_id])) for memory_id in limited_ids]
 
     def upsert_memory(self, memory: MemoryRecord, vector: list[float]) -> None:
         self.upserts.append((memory, vector))
@@ -367,6 +392,22 @@ def test_search_advances_last_accessed_at_for_returned_memories() -> None:
     assert returned.updated_at == existing.updated_at
 
 
+def test_query_present_search_advances_last_accessed_at_for_returned_memories() -> None:
+    request = build_create_request(title="Existing memory", content="Helpful semantic note.")
+    existing = build_memory_record("existing-memory", request)
+    postgres = FakePostgresStore(stored_memories={existing.id: existing})
+    qdrant = FakeQdrantStore(search_results=[existing.id])
+    service = MemoryService(postgres=postgres, qdrant=qdrant, embedder=DeterministicEmbedder(8))
+
+    response = service.search(MemorySearchRequest(query="related guidance"))
+
+    assert len(response.results) == 1
+    returned = response.results[0]
+    assert returned.id == existing.id
+    assert returned.last_accessed_at >= existing.last_accessed_at
+    assert len(qdrant.search_calls) == 1
+
+
 def test_returned_records_keep_normalized_source_shape_across_get_search_archive_and_duplicate() -> None:
     request = build_create_request(source={"type": " Manual ", "name": " Codex CLI "})
     existing = build_memory_record("existing-memory", request)
@@ -444,63 +485,85 @@ def test_search_keeps_prior_memory_visible_when_only_archived_superseder_exists(
     assert [memory.id for memory in response.results] == [prior.id]
 
 
-def test_search_ranks_exact_title_match_ahead_of_weaker_matches() -> None:
-    exact = build_memory_record(
-        "exact-memory",
-        build_create_request(title="Keep responses concise", content="General writing guidance.", confidence=0.3),
-    ).model_copy(update={"updated_at": utcnow() - timedelta(hours=3)})
-    title_partial = build_memory_record(
-        "title-memory",
-        build_create_request(title="Keep responses concise for tool output", content="More specific notes.", confidence=0.9),
-    ).model_copy(update={"updated_at": utcnow()})
-    content_only = build_memory_record(
-        "content-memory",
-        build_create_request(title="Formatting note", content="Please keep responses concise during reviews.", confidence=1.0),
-    ).model_copy(update={"updated_at": utcnow()})
+def test_query_present_search_can_return_semantic_match_without_direct_substring_hit() -> None:
+    semantic_match = build_memory_record(
+        "semantic-memory",
+        build_create_request(
+            title="Concise writing guidance",
+            content="Prefer direct answers and avoid unnecessary filler.",
+        ),
+    )
     postgres = FakePostgresStore(
-        stored_memories={exact.id: exact, title_partial.id: title_partial, content_only.id: content_only}
+        stored_memories={semantic_match.id: semantic_match}
     )
-    service = MemoryService(postgres=postgres, qdrant=FakeQdrantStore(), embedder=DeterministicEmbedder(8))
+    qdrant = FakeQdrantStore(search_results=[semantic_match.id])
+    service = MemoryService(postgres=postgres, qdrant=qdrant, embedder=DeterministicEmbedder(8))
 
-    response = service.search(MemorySearchRequest(query="Keep responses concise"))
+    response = service.search(MemorySearchRequest(query="brief replies"))
 
-    assert [memory.id for memory in response.results] == [exact.id, title_partial.id, content_only.id]
+    assert [memory.id for memory in response.results] == [semantic_match.id]
 
 
-def test_search_ranks_title_match_ahead_of_content_only_match() -> None:
-    title_match = build_memory_record(
-        "title-memory",
-        build_create_request(title="Need direct answers", content="Tool guidance.", confidence=0.2),
+def test_query_present_search_preserves_semantic_candidate_order_after_postgres_filtering() -> None:
+    first = build_memory_record(
+        "alpha-memory",
+        build_create_request(title="Alpha", content="Semantic candidate one."),
     )
-    content_match = build_memory_record(
-        "content-memory",
-        build_create_request(title="General note", content="Need direct answers in summaries.", confidence=0.9),
-    ).model_copy(update={"updated_at": utcnow() + timedelta(hours=1)})
-    postgres = FakePostgresStore(stored_memories={title_match.id: title_match, content_match.id: content_match})
-    service = MemoryService(postgres=postgres, qdrant=FakeQdrantStore(), embedder=DeterministicEmbedder(8))
-
-    response = service.search(MemorySearchRequest(query="Need direct answers"))
-
-    assert [memory.id for memory in response.results] == [title_match.id, content_match.id]
-
-
-def test_search_uses_confidence_to_break_ties_within_match_tier() -> None:
-    lower_confidence = build_memory_record(
-        "lower-confidence",
-        build_create_request(title="Review checklist", content="Shared guidance.", confidence=0.4),
+    filtered_out = build_memory_record(
+        "filtered-memory",
+        build_create_request(title="Filtered", tags=["other"], content="Semantic candidate two."),
     )
-    higher_confidence = build_memory_record(
-        "higher-confidence",
-        build_create_request(title="Review checklist", content="Shared guidance.", confidence=0.9),
-    ).model_copy(update={"updated_at": lower_confidence.updated_at - timedelta(hours=1)})
-    postgres = FakePostgresStore(
-        stored_memories={lower_confidence.id: lower_confidence, higher_confidence.id: higher_confidence}
+    second = build_memory_record(
+        "beta-memory",
+        build_create_request(title="Beta", content="Semantic candidate three.", tags=["style"]),
+    ).model_copy(update={"updated_at": first.updated_at + timedelta(hours=1)})
+    postgres = FakePostgresStore(stored_memories={first.id: first, filtered_out.id: filtered_out, second.id: second})
+    qdrant = FakeQdrantStore(search_results=[filtered_out.id, first.id, second.id])
+    service = MemoryService(postgres=postgres, qdrant=qdrant, embedder=DeterministicEmbedder(8))
+
+    response = service.search(MemorySearchRequest(query="semantic", tags=["style"]))
+
+    assert [memory.id for memory in response.results] == [first.id, second.id]
+
+
+def test_query_present_search_uses_updated_at_then_id_to_break_semantic_ties() -> None:
+    shared_updated_at = utcnow()
+    alpha = build_memory_record(
+        "alpha-memory",
+        build_create_request(title="Alpha semantic", content="Shared guidance."),
+    ).model_copy(update={"updated_at": shared_updated_at})
+    beta = build_memory_record(
+        "beta-memory",
+        build_create_request(title="Beta semantic", content="Shared guidance."),
+    ).model_copy(update={"updated_at": shared_updated_at})
+    newer = build_memory_record(
+        "newer-memory",
+        build_create_request(title="Newer semantic", content="Shared guidance."),
+    ).model_copy(update={"updated_at": shared_updated_at + timedelta(hours=1)})
+    postgres = FakePostgresStore(stored_memories={beta.id: beta, alpha.id: alpha, newer.id: newer})
+    qdrant = FakeQdrantStore(
+        search_results=[beta.id, alpha.id, newer.id],
+        search_scores={beta.id: 0.9, alpha.id: 0.9, newer.id: 0.9},
     )
-    service = MemoryService(postgres=postgres, qdrant=FakeQdrantStore(), embedder=DeterministicEmbedder(8))
+    service = MemoryService(postgres=postgres, qdrant=qdrant, embedder=DeterministicEmbedder(8))
 
-    response = service.search(MemorySearchRequest(query="Review checklist"))
+    response = service.search(MemorySearchRequest(query="semantic"))
 
-    assert [memory.id for memory in response.results] == [higher_confidence.id, lower_confidence.id]
+    assert [memory.id for memory in response.results] == [newer.id, alpha.id, beta.id]
+
+
+def test_query_present_search_returns_empty_when_qdrant_has_no_candidates() -> None:
+    semantic_match = build_memory_record(
+        "semantic-memory",
+        build_create_request(title="Concise writing guidance", content="Prefer direct answers."),
+    )
+    postgres = FakePostgresStore(stored_memories={semantic_match.id: semantic_match})
+    qdrant = FakeQdrantStore(search_results=[])
+    service = MemoryService(postgres=postgres, qdrant=qdrant, embedder=DeterministicEmbedder(8))
+
+    response = service.search(MemorySearchRequest(query="semantic"))
+
+    assert response.results == []
 
 
 def test_search_without_query_uses_updated_at_then_id_ordering() -> None:

@@ -199,10 +199,11 @@ class PostgresStore:
         filters: list[sql.Composed] = []
         params: list[Any] = []
         order_by = sql.SQL("updated_at DESC, id ASC")
+        candidate_ids = list(ids) if ids is not None else None
 
-        if ids is not None:
+        if candidate_ids is not None:
             filters.append(sql.SQL("id = ANY(%s)"))
-            params.append(list(ids))
+            params.append(candidate_ids)
         if request.namespace:
             filters.append(sql.SQL("namespace = %s"))
             params.append(request.namespace)
@@ -231,7 +232,7 @@ class PostgresStore:
                     """
                 )
             )
-        if request.query:
+        if request.query and candidate_ids is None:
             filters.append(sql.SQL("(title ILIKE %s OR content ILIKE %s)"))
             pattern = f"%{request.query}%"
             params.extend([pattern, pattern])
@@ -249,6 +250,15 @@ class PostgresStore:
                 """
             )
             params.extend([request.query, pattern, pattern])
+        elif candidate_ids is not None:
+            order_by = sql.SQL(
+                """
+                array_position(%s::text[], id) ASC,
+                updated_at DESC,
+                id ASC
+                """
+            )
+            params.append(candidate_ids)
 
         where_clause = sql.SQL("")
         if filters:

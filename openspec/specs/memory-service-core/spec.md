@@ -244,7 +244,13 @@ Normalization for duplicate checks MUST be deterministic and MUST treat differen
 
 ### Requirement: Search Stored Memories
 
-The system MUST provide a search operation that returns relevant non-archived memories and accepts filter inputs that constrain the search scope.
+The system MUST provide a search operation that returns relevant memories and accepts filter inputs that constrain the search scope.
+
+When a query is present, the system MUST use semantic retrieval to obtain candidate memories before applying canonical search filters.
+
+When no query is present, the system MUST preserve browse-style search behavior without requiring semantic retrieval.
+
+The system MUST apply namespace, scope, kind, tag, archived, and superseded filtering rules against canonical stored memory records before returning results.
 
 #### Scenario: Search with namespace and scope filters
 
@@ -269,35 +275,50 @@ The system MUST provide a search operation that returns relevant non-archived me
 - **WHEN** a client performs a search
 - **THEN** the system returns matching memories without requiring the client to know which storage or ranking mechanisms were used internally
 
+#### Scenario: Query-present search can return a semantic match without a direct substring hit
+
+- **WHEN** a client searches with non-empty query text
+- **AND** a stored memory is semantically relevant even though its title and content do not contain the exact query substring
+- **THEN** that memory remains eligible for results through semantic retrieval
+- **AND** the response returns the canonical stored memory record rather than a retrieval payload projection
+
+#### Scenario: PostgreSQL filters still constrain semantic candidates
+
+- **WHEN** semantic retrieval returns candidate memories from multiple namespaces, scopes, kinds, tags, or lifecycle states
+- **THEN** the search response includes only candidates that satisfy the explicit request filters and current archived and superseded rules
+
+#### Scenario: Query-less search remains browse-style
+
+- **WHEN** a client searches without query text
+- **THEN** the system does not require semantic retrieval to produce results
+- **AND** the response preserves the existing browse-style search behavior
+
 ### Requirement: Search Uses Deterministic Query-Aware Ordering
 
 The search operation MUST return results in a deterministic order.
 
-When a query is present, the system MUST order matching memories using the following priority, from strongest to weakest:
+When a query is present, the system MUST use semantic retrieval rank as the primary ordering signal for eligible candidates.
 
-1. exact case-insensitive title matches
-2. title substring matches
-3. content substring matches
-4. higher `confidence`
-5. more recent `updated_at`
-6. lexicographically smaller `id`
+When multiple eligible results share the same semantic rank, the system MUST break ties by `updated_at` descending and then `id` ascending.
 
 When no query is present, the system MUST preserve browse-style ordering by `updated_at` descending and `id` ascending.
 
-#### Scenario: Exact title matches rank ahead of weaker matches
+#### Scenario: Higher-ranked semantic candidate appears first
 
-- **WHEN** a client searches with query text that exactly matches one memory title and only partially matches other memories
-- **THEN** the exact title match appears before title-substring and content-only matches in the returned results
+- **WHEN** a client searches with query text and semantic retrieval returns two eligible candidate memories in a ranked order
+- **THEN** the higher-ranked candidate appears earlier in the returned results
 
-#### Scenario: Title matches rank ahead of content-only matches
+#### Scenario: PostgreSQL filters do not reorder surviving semantic candidates
 
-- **WHEN** a client searches with query text that appears in one memory title and in another memory content only
-- **THEN** the title match appears before the content-only match in the returned results
+- **WHEN** a client searches with query text
+- **AND** some earlier semantic candidates are removed by namespace, tag, archived, or superseded filtering
+- **THEN** the remaining eligible candidates preserve their relative semantic order in the final response
 
-#### Scenario: Confidence breaks ties within the same match tier
+#### Scenario: Deterministic tie-breaking applies within the same semantic rank
 
-- **WHEN** multiple memories match the same query at the same textual match tier
-- **THEN** memories with higher `confidence` appear earlier in the returned results
+- **WHEN** multiple eligible memories share the same semantic retrieval rank
+- **THEN** the system orders those memories by `updated_at` descending
+- **AND** uses `id` ascending to break any remaining ties deterministically
 
 #### Scenario: Non-query searches stay chronological with deterministic ties
 

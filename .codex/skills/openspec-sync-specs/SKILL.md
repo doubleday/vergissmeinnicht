@@ -17,13 +17,16 @@ This is an **agent-driven** operation - you will read delta specs and directly e
 
 **Steps**
 
-1. **If no change name provided, prompt for selection**
+1. **If no change name provided, resolve selection from active changes**
 
-   Run `openspec list --json` to get available changes. Use the **AskUserQuestion tool** to let the user select.
+   Run `openspec list --json` to get available changes.
 
    Show changes that have delta specs (under `specs/` directory).
 
-   **IMPORTANT**: Do NOT guess or auto-select a change. Always let the user choose.
+   **IMPORTANT**:
+   - If exactly one active change is available, auto-select it and announce the selection.
+   - If multiple active changes are available, use the **AskUserQuestion tool** to let the user choose.
+   - If no active changes are available, report that and stop.
 
 2. **Find delta specs**
 

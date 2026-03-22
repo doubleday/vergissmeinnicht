@@ -18,12 +18,19 @@ class PostgresStoreLike(Protocol):
     def create_memory(self, memory_id: str, request: MemoryCreate) -> MemoryRecord: ...
     def get_memory(self, memory_id: str, *, update_access_time: bool = False) -> MemoryRecord | None: ...
     def archive_memory(self, memory_id: str) -> MemoryRecord | None: ...
-    def search(self, request: MemorySearchRequest, *, update_access_time: bool = False) -> list[MemoryRecord]: ...
+    def search(
+        self,
+        request: MemorySearchRequest,
+        ids: list[str] | None = None,
+        *,
+        update_access_time: bool = False,
+    ) -> list[MemoryRecord]: ...
 
 
 class QdrantStoreLike(Protocol):
     def init(self) -> None: ...
     def ping(self) -> None: ...
+    def search_memory_candidates(self, vector: list[float], *, limit: int) -> list[tuple[str, float]]: ...
     def upsert_memory(self, memory: MemoryRecord, vector: list[float]) -> None: ...
 
 
@@ -89,4 +96,20 @@ class MemoryService:
         return memory
 
     def search(self, request: MemorySearchRequest) -> SearchResponse:
-        return SearchResponse(results=self.postgres.search(request, update_access_time=True))
+        if request.query is None:
+            return SearchResponse(results=self.postgres.search(request, update_access_time=True))
+
+        candidates = self.qdrant.search_memory_candidates(
+            self.embedder.embed(request.query),
+            limit=min(request.limit * 5, 500),
+        )
+        if not candidates:
+            return SearchResponse(results=[])
+        score_by_id = {memory_id: score for memory_id, score in candidates}
+        results = self.postgres.search(
+            request,
+            ids=[memory_id for memory_id, _score in candidates],
+            update_access_time=True,
+        )
+        results.sort(key=lambda memory: (-score_by_id[memory.id], -memory.updated_at.timestamp(), memory.id))
+        return SearchResponse(results=results)
