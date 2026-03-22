@@ -198,6 +198,7 @@ class PostgresStore:
     ) -> list[MemoryRecord]:
         filters: list[sql.Composed] = []
         params: list[Any] = []
+        order_by = sql.SQL("updated_at DESC, id ASC")
 
         if ids is not None:
             filters.append(sql.SQL("id = ANY(%s)"))
@@ -234,14 +235,28 @@ class PostgresStore:
             filters.append(sql.SQL("(title ILIKE %s OR content ILIKE %s)"))
             pattern = f"%{request.query}%"
             params.extend([pattern, pattern])
+            order_by = sql.SQL(
+                """
+                CASE
+                    WHEN lower(title) = lower(%s) THEN 0
+                    WHEN title ILIKE %s THEN 1
+                    WHEN content ILIKE %s THEN 2
+                    ELSE 3
+                END ASC,
+                confidence DESC,
+                updated_at DESC,
+                id ASC
+                """
+            )
+            params.extend([request.query, pattern, pattern])
 
         where_clause = sql.SQL("")
         if filters:
             where_clause = sql.SQL("WHERE ") + sql.SQL(" AND ").join(filters)
 
         query = sql.SQL(
-            "SELECT * FROM memories {where_clause} ORDER BY updated_at DESC LIMIT %s"
-        ).format(where_clause=where_clause)
+            "SELECT * FROM memories {where_clause} ORDER BY {order_by} LIMIT %s"
+        ).format(where_clause=where_clause, order_by=order_by)
         params.append(request.limit)
 
         with self.connect() as conn:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import timedelta
 
 from memory_api.models import MemoryCreate, MemoryRecord, MemorySearchRequest, utcnow
 from memory_api.services.embedding import DeterministicEmbedder
@@ -108,6 +109,22 @@ class FakePostgresStore:
                 for memory in memories
                 if needle in memory.title.casefold() or needle in memory.content.casefold()
             ]
+            memories.sort(
+                key=lambda memory: (
+                    0
+                    if memory.title.casefold() == needle
+                    else 1
+                    if needle in memory.title.casefold()
+                    else 2
+                    if needle in memory.content.casefold()
+                    else 3,
+                    -memory.confidence,
+                    -memory.updated_at.timestamp(),
+                    memory.id,
+                )
+            )
+        else:
+            memories.sort(key=lambda memory: (-memory.updated_at.timestamp(), memory.id))
         if request.exclude_superseded:
             superseded_keys = {
                 (memory.namespace, memory.supersedes_memory_id)
@@ -332,6 +349,84 @@ def test_search_keeps_prior_memory_visible_when_only_archived_superseder_exists(
     response = service.search(MemorySearchRequest(exclude_superseded=True))
 
     assert [memory.id for memory in response.results] == [prior.id]
+
+
+def test_search_ranks_exact_title_match_ahead_of_weaker_matches() -> None:
+    exact = build_memory_record(
+        "exact-memory",
+        build_create_request(title="Keep responses concise", content="General writing guidance.", confidence=0.3),
+    ).model_copy(update={"updated_at": utcnow() - timedelta(hours=3)})
+    title_partial = build_memory_record(
+        "title-memory",
+        build_create_request(title="Keep responses concise for tool output", content="More specific notes.", confidence=0.9),
+    ).model_copy(update={"updated_at": utcnow()})
+    content_only = build_memory_record(
+        "content-memory",
+        build_create_request(title="Formatting note", content="Please keep responses concise during reviews.", confidence=1.0),
+    ).model_copy(update={"updated_at": utcnow()})
+    postgres = FakePostgresStore(
+        stored_memories={exact.id: exact, title_partial.id: title_partial, content_only.id: content_only}
+    )
+    service = MemoryService(postgres=postgres, qdrant=FakeQdrantStore(), embedder=DeterministicEmbedder(8))
+
+    response = service.search(MemorySearchRequest(query="Keep responses concise"))
+
+    assert [memory.id for memory in response.results] == [exact.id, title_partial.id, content_only.id]
+
+
+def test_search_ranks_title_match_ahead_of_content_only_match() -> None:
+    title_match = build_memory_record(
+        "title-memory",
+        build_create_request(title="Need direct answers", content="Tool guidance.", confidence=0.2),
+    )
+    content_match = build_memory_record(
+        "content-memory",
+        build_create_request(title="General note", content="Need direct answers in summaries.", confidence=0.9),
+    ).model_copy(update={"updated_at": utcnow() + timedelta(hours=1)})
+    postgres = FakePostgresStore(stored_memories={title_match.id: title_match, content_match.id: content_match})
+    service = MemoryService(postgres=postgres, qdrant=FakeQdrantStore(), embedder=DeterministicEmbedder(8))
+
+    response = service.search(MemorySearchRequest(query="Need direct answers"))
+
+    assert [memory.id for memory in response.results] == [title_match.id, content_match.id]
+
+
+def test_search_uses_confidence_to_break_ties_within_match_tier() -> None:
+    lower_confidence = build_memory_record(
+        "lower-confidence",
+        build_create_request(title="Review checklist", content="Shared guidance.", confidence=0.4),
+    )
+    higher_confidence = build_memory_record(
+        "higher-confidence",
+        build_create_request(title="Review checklist", content="Shared guidance.", confidence=0.9),
+    ).model_copy(update={"updated_at": lower_confidence.updated_at - timedelta(hours=1)})
+    postgres = FakePostgresStore(
+        stored_memories={lower_confidence.id: lower_confidence, higher_confidence.id: higher_confidence}
+    )
+    service = MemoryService(postgres=postgres, qdrant=FakeQdrantStore(), embedder=DeterministicEmbedder(8))
+
+    response = service.search(MemorySearchRequest(query="Review checklist"))
+
+    assert [memory.id for memory in response.results] == [higher_confidence.id, lower_confidence.id]
+
+
+def test_search_without_query_uses_updated_at_then_id_ordering() -> None:
+    shared_updated_at = utcnow()
+    alpha = build_memory_record("alpha-memory", build_create_request(title="Alpha")).model_copy(
+        update={"updated_at": shared_updated_at}
+    )
+    beta = build_memory_record("beta-memory", build_create_request(title="Beta")).model_copy(
+        update={"updated_at": shared_updated_at}
+    )
+    newer = build_memory_record("newer-memory", build_create_request(title="Newer")).model_copy(
+        update={"updated_at": shared_updated_at + timedelta(hours=1)}
+    )
+    postgres = FakePostgresStore(stored_memories={beta.id: beta, alpha.id: alpha, newer.id: newer})
+    service = MemoryService(postgres=postgres, qdrant=FakeQdrantStore(), embedder=DeterministicEmbedder(8))
+
+    response = service.search(MemorySearchRequest())
+
+    assert [memory.id for memory in response.results] == [newer.id, alpha.id, beta.id]
 
 
 def test_archive_of_superseding_memory_does_not_cascade() -> None:
