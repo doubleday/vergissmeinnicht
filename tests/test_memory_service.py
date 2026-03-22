@@ -37,7 +37,7 @@ def build_memory_record(memory_id: str, request: MemoryCreate, *, archived: bool
             "content": request.content,
             "supersedes_memory_id": request.supersedes_memory_id,
             "tags": request.tags,
-            "source": request.source.model_dump(),
+            "source": request.source.model_dump(exclude_none=True),
             "confidence": request.confidence,
             "metadata": request.metadata,
             "created_at": now,
@@ -172,6 +172,8 @@ def test_create_memory_inserts_new_record_when_no_active_duplicate_exists() -> N
     assert len(qdrant.upserts) == 1
     assert qdrant.upserts[0][0].id == created.id
     assert created.last_accessed_at == created.created_at
+    assert created.source.type == "manual"
+    assert created.source.name is None
 
 
 def test_create_memory_returns_existing_record_for_duplicate_active_write() -> None:
@@ -187,6 +189,46 @@ def test_create_memory_returns_existing_record_for_duplicate_active_write() -> N
     assert postgres.create_calls == []
     assert qdrant.upserts == []
     assert returned.last_accessed_at == existing.last_accessed_at
+
+
+def test_create_memory_normalizes_source_type_before_persistence() -> None:
+    request = build_create_request(source={"type": " Manual "})
+    postgres = FakePostgresStore()
+    qdrant = FakeQdrantStore()
+    service = MemoryService(postgres=postgres, qdrant=qdrant, embedder=DeterministicEmbedder(8))
+
+    created = service.create_memory(request)
+
+    assert created.source.type == "manual"
+    assert postgres.create_calls[0][1].source.type == "manual"
+    assert qdrant.upserts[0][0].source.type == "manual"
+
+
+def test_create_memory_trims_source_name_and_preserves_it_when_non_blank() -> None:
+    request = build_create_request(source={"type": "manual", "name": " Codex CLI "})
+    postgres = FakePostgresStore()
+    qdrant = FakeQdrantStore()
+    service = MemoryService(postgres=postgres, qdrant=qdrant, embedder=DeterministicEmbedder(8))
+
+    created = service.create_memory(request)
+
+    assert created.source.name == "Codex CLI"
+    assert postgres.create_calls[0][1].source.name == "Codex CLI"
+    assert qdrant.upserts[0][0].source.name == "Codex CLI"
+
+
+def test_create_memory_omits_blank_source_name_from_canonical_shape() -> None:
+    request = build_create_request(source={"type": "manual", "name": "   "})
+    postgres = FakePostgresStore()
+    qdrant = FakeQdrantStore()
+    service = MemoryService(postgres=postgres, qdrant=qdrant, embedder=DeterministicEmbedder(8))
+
+    created = service.create_memory(request)
+
+    assert created.source.name is None
+    assert "name" not in created.source.model_dump(exclude_none=True)
+    assert "name" not in postgres.create_calls[0][1].source.model_dump(exclude_none=True)
+    assert "name" not in qdrant.upserts[0][0].source.model_dump(exclude_none=True)
 
 
 def test_create_memory_persists_supersession_link_for_same_namespace_reference() -> None:
@@ -310,6 +352,25 @@ def test_search_advances_last_accessed_at_for_returned_memories() -> None:
     assert returned.id == existing.id
     assert returned.last_accessed_at >= existing.last_accessed_at
     assert returned.updated_at == existing.updated_at
+
+
+def test_returned_records_keep_normalized_source_shape_across_get_search_archive_and_duplicate() -> None:
+    request = build_create_request(source={"type": " Manual ", "name": " Codex CLI "})
+    existing = build_memory_record("existing-memory", request)
+    postgres = FakePostgresStore(duplicate_memory=existing, stored_memories={existing.id: existing})
+    service = MemoryService(postgres=postgres, qdrant=FakeQdrantStore(), embedder=DeterministicEmbedder(8))
+
+    duplicate = service.create_memory(build_create_request(source={"type": "MANUAL", "name": "Codex CLI"}))
+    fetched = service.get_memory(existing.id)
+    searched = service.search(MemorySearchRequest()).results[0]
+    archived = service.archive_memory(existing.id)
+
+    assert duplicate.source.model_dump(exclude_none=True) == {"type": "manual", "name": "Codex CLI"}
+    assert fetched is not None
+    assert fetched.source.model_dump(exclude_none=True) == {"type": "manual", "name": "Codex CLI"}
+    assert searched.source.model_dump(exclude_none=True) == {"type": "manual", "name": "Codex CLI"}
+    assert archived is not None
+    assert archived.source.model_dump(exclude_none=True) == {"type": "manual", "name": "Codex CLI"}
 
 
 def test_search_preserves_superseded_memories_by_default() -> None:

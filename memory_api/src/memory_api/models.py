@@ -8,7 +8,25 @@ MemoryScope = Literal["global", "project", "agent"]
 
 
 class Source(BaseModel):
-    type: str = Field(min_length=1)
+    type: str
+    name: str | None = None
+
+    @field_validator("type")
+    @classmethod
+    def normalize_type(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not normalized:
+            msg = "source.type must not be empty"
+            raise ValueError(msg)
+        return normalized
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
 
 class MemoryCreate(BaseModel):

@@ -45,7 +45,7 @@ def readyz(request: Request) -> HealthResponse:
     return HealthResponse(status=status, checks=checks)
 
 
-@app.post("/memories", response_model=MemoryRecord)
+@app.post("/memories", response_model=MemoryRecord, response_model_exclude_none=True)
 def create_memory(request: Request, payload: MemoryCreate) -> MemoryRecord:
     try:
         return get_service(request).create_memory(payload)
@@ -53,7 +53,7 @@ def create_memory(request: Request, payload: MemoryCreate) -> MemoryRecord:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-@app.get("/memories/{memory_id}", response_model=MemoryRecord)
+@app.get("/memories/{memory_id}", response_model=MemoryRecord, response_model_exclude_none=True)
 def get_memory(request: Request, memory_id: str) -> MemoryRecord:
     memory = get_service(request).get_memory(memory_id)
     if memory is None:
@@ -61,7 +61,7 @@ def get_memory(request: Request, memory_id: str) -> MemoryRecord:
     return memory
 
 
-@app.post("/memories/{memory_id}/archive", response_model=MemoryRecord)
+@app.post("/memories/{memory_id}/archive", response_model=MemoryRecord, response_model_exclude_none=True)
 def archive_memory(request: Request, memory_id: str) -> MemoryRecord:
     memory = get_service(request).archive_memory(memory_id)
     if memory is None:
@@ -69,6 +69,6 @@ def archive_memory(request: Request, memory_id: str) -> MemoryRecord:
     return memory
 
 
-@app.post("/memories/search", response_model=SearchResponse)
+@app.post("/memories/search", response_model=SearchResponse, response_model_exclude_none=True)
 def search_memories(request: Request, payload: MemorySearchRequest) -> SearchResponse:
     return get_service(request).search(payload)

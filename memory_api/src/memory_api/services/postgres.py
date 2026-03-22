@@ -101,7 +101,7 @@ class PostgresStore:
                         request.content,
                         request.supersedes_memory_id,
                         Jsonb(request.tags),
-                        Jsonb(request.source.model_dump()),
+                        Jsonb(request.source.model_dump(exclude_none=True)),
                         request.confidence,
                         Jsonb(request.metadata),
                         now,
