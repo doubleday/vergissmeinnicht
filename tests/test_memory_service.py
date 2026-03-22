@@ -231,6 +231,19 @@ def test_create_memory_omits_blank_source_name_from_canonical_shape() -> None:
     assert "name" not in qdrant.upserts[0][0].source.model_dump(exclude_none=True)
 
 
+def test_create_memory_normalizes_confidence_before_persistence() -> None:
+    request = build_create_request(confidence=0.1235)
+    postgres = FakePostgresStore()
+    qdrant = FakeQdrantStore()
+    service = MemoryService(postgres=postgres, qdrant=qdrant, embedder=DeterministicEmbedder(8))
+
+    created = service.create_memory(request)
+
+    assert created.confidence == 0.124
+    assert postgres.create_calls[0][1].confidence == 0.124
+    assert qdrant.upserts[0][0].confidence == 0.124
+
+
 def test_create_memory_persists_supersession_link_for_same_namespace_reference() -> None:
     prior = build_memory_record("prior-memory", build_create_request())
     request = build_create_request(supersedes_memory_id=prior.id)
@@ -371,6 +384,25 @@ def test_returned_records_keep_normalized_source_shape_across_get_search_archive
     assert searched.source.model_dump(exclude_none=True) == {"type": "manual", "name": "Codex CLI"}
     assert archived is not None
     assert archived.source.model_dump(exclude_none=True) == {"type": "manual", "name": "Codex CLI"}
+
+
+def test_returned_records_keep_normalized_confidence_across_get_search_archive_and_duplicate() -> None:
+    request = build_create_request(confidence=0.4567)
+    existing = build_memory_record("existing-memory", request)
+    postgres = FakePostgresStore(duplicate_memory=existing, stored_memories={existing.id: existing})
+    service = MemoryService(postgres=postgres, qdrant=FakeQdrantStore(), embedder=DeterministicEmbedder(8))
+
+    duplicate = service.create_memory(build_create_request(confidence=0.9999))
+    fetched = service.get_memory(existing.id)
+    searched = service.search(MemorySearchRequest()).results[0]
+    archived = service.archive_memory(existing.id)
+
+    assert duplicate.confidence == 0.457
+    assert fetched is not None
+    assert fetched.confidence == 0.457
+    assert searched.confidence == 0.457
+    assert archived is not None
+    assert archived.confidence == 0.457
 
 
 def test_search_preserves_superseded_memories_by_default() -> None:

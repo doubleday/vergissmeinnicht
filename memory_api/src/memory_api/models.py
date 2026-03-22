@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -40,6 +41,11 @@ class MemoryCreate(BaseModel):
     source: Source
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("confidence")
+    @classmethod
+    def normalize_confidence(cls, value: float) -> float:
+        return float(Decimal(str(value)).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP))
 
 
 class MemoryRecord(MemoryCreate):
