@@ -1,20 +1,35 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+context: |
+  Project: Self-hosted memory service for coding agents and local automation.
+  Primary stack: FastAPI, PostgreSQL, Qdrant, Docker Compose.
+  Product direction: one stable memory backend with thin adapters for MCP, Codex/OpenAI function calling, CLI, and scripts.
+  Current priority: build the smallest useful memory service before adding auto-memory or backend abstractions like Mem0.
+  Architecture rules:
+  - PostgreSQL is the canonical store for lifecycle, auditability, and exact metadata.
+  - Qdrant is the retrieval index for embeddings and semantic search payloads.
+  - Memory writes are explicit; no automatic extraction from conversations in v1.
+  - The external contract should stay small and stable: create, search, get by id, archive.
+  Initial taxonomy:
+  - kinds: rule, example, feedback, correction, preference
+  - scopes: global, project, agent
+  Working style:
+  - prefer boring, inspectable infrastructure over premature abstractions
+  - container-first local development
+  - keep requirements testable and implementation steps incremental
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+rules:
+  proposal:
+    - Tie every proposal to a concrete milestone or implementation slice.
+    - State explicit non-goals when the scope could expand.
+    - Keep capability names stable and implementation-agnostic.
+  specs:
+    - Use normative language and testable requirements.
+    - Prefer small capability specs over one broad umbrella spec.
+    - Scenarios should describe observable API or system behavior, not internal code structure.
+  design:
+    - Record decisions that affect persistence, retrieval flow, API surface, or adapter boundaries.
+    - Call out at least one risk or trade-off for each substantial design.
+  tasks:
+    - Group tasks by delivery slice that can be completed and verified independently.
+    - Prefer vertical slices over layer-by-layer checklists.
