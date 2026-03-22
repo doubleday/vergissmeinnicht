@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Define the local development foundation for the memory service stack, including one-command startup, persistent backing stores, environment-driven configuration, readiness checks, and direct inspection of canonical and retrieval-layer data.
+
+## Requirements
 
 ### Requirement: One-Command Local Stack Startup
 The system MUST provide a local development entry point that starts `memory-api`, `postgres`, and `qdrant` together with a single command.
