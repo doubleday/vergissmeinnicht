@@ -30,9 +30,16 @@ htmlcov/
 .ipynb_checkpoints/
 
 # IDE/editor
-.vscode/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/extensions.json
 .idea/
-.codex/
+
+# Codex/OpenSpec
+.codex/*
+!.codex/skills/
+!.codex/skills/**
 
 # Local environment/config
 .env
