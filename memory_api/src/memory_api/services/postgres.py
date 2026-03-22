@@ -1,0 +1,151 @@
+from __future__ import annotations
+
+from collections.abc import Iterable
+from typing import Any
+
+import psycopg
+from psycopg import sql
+from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
+
+from memory_api.models import MemoryCreate, MemoryRecord, MemorySearchRequest, utcnow
+
+
+class PostgresStore:
+    def __init__(self, dsn: str) -> None:
+        self.dsn = dsn
+
+    def connect(self) -> psycopg.Connection:
+        return psycopg.connect(self.dsn, row_factory=dict_row)
+
+    def init(self) -> None:
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS memories (
+                        id TEXT PRIMARY KEY,
+                        kind TEXT NOT NULL,
+                        scope TEXT NOT NULL,
+                        namespace TEXT NOT NULL,
+                        title TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+                        source JSONB NOT NULL,
+                        confidence DOUBLE PRECISION NOT NULL,
+                        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        created_at TIMESTAMPTZ NOT NULL,
+                        updated_at TIMESTAMPTZ NOT NULL,
+                        archived BOOLEAN NOT NULL DEFAULT FALSE
+                    )
+                    """
+                )
+            conn.commit()
+
+    def ping(self) -> None:
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+
+    def create_memory(self, memory_id: str, request: MemoryCreate) -> MemoryRecord:
+        now = utcnow()
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO memories (
+                        id, kind, scope, namespace, title, content, tags, source,
+                        confidence, metadata, created_at, updated_at, archived
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE)
+                    RETURNING *
+                    """,
+                    (
+                        memory_id,
+                        request.kind,
+                        request.scope,
+                        request.namespace,
+                        request.title,
+                        request.content,
+                        Jsonb(request.tags),
+                        Jsonb(request.source.model_dump()),
+                        request.confidence,
+                        Jsonb(request.metadata),
+                        now,
+                        now,
+                    ),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        return MemoryRecord.model_validate(row)
+
+    def get_memory(self, memory_id: str) -> MemoryRecord | None:
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM memories WHERE id = %s", (memory_id,))
+                row = cur.fetchone()
+        if row is None:
+            return None
+        return MemoryRecord.model_validate(row)
+
+    def archive_memory(self, memory_id: str) -> MemoryRecord | None:
+        now = utcnow()
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE memories
+                    SET archived = TRUE, updated_at = %s
+                    WHERE id = %s
+                    RETURNING *
+                    """,
+                    (now, memory_id),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        if row is None:
+            return None
+        return MemoryRecord.model_validate(row)
+
+    def search(self, request: MemorySearchRequest, ids: Iterable[str] | None = None) -> list[MemoryRecord]:
+        filters: list[sql.Composed] = []
+        params: list[Any] = []
+
+        if ids is not None:
+            filters.append(sql.SQL("id = ANY(%s)"))
+            params.append(list(ids))
+        if request.namespace:
+            filters.append(sql.SQL("namespace = %s"))
+            params.append(request.namespace)
+        if request.scope:
+            filters.append(sql.SQL("scope = %s"))
+            params.append(request.scope)
+        if request.kind:
+            filters.append(sql.SQL("kind = %s"))
+            params.append(request.kind)
+        if request.tags:
+            filters.append(sql.SQL("tags @> %s::jsonb"))
+            params.append(Jsonb(request.tags))
+        if not request.include_archived:
+            filters.append(sql.SQL("archived = FALSE"))
+        if request.query:
+            filters.append(sql.SQL("(title ILIKE %s OR content ILIKE %s)"))
+            pattern = f"%{request.query}%"
+            params.extend([pattern, pattern])
+
+        where_clause = sql.SQL("")
+        if filters:
+            where_clause = sql.SQL("WHERE ") + sql.SQL(" AND ").join(filters)
+
+        query = sql.SQL(
+            "SELECT * FROM memories {where_clause} ORDER BY updated_at DESC LIMIT %s"
+        ).format(where_clause=where_clause)
+        params.append(request.limit)
+
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                rows = cur.fetchall()
+
+        return [MemoryRecord.model_validate(row) for row in rows]
