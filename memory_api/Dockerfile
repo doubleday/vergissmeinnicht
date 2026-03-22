@@ -8,6 +8,7 @@ ENV UV_COMPILE_BYTECODE=1
 ENV UV_LINK_MODE=copy
 
 COPY pyproject.toml uv.lock README.md /app/
+COPY evals /app/evals
 COPY memory_api /app/memory_api
 COPY scripts /app/scripts
 

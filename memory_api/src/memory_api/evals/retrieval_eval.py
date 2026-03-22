@@ -1,0 +1,257 @@
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+import httpx
+
+
+DEFAULT_BASE_URL = os.environ.get("MEMORY_API_BASE_URL", "http://127.0.0.1:8000")
+DEFAULT_CORPUS_PATH = Path("evals/retrieval/starter/corpus.jsonl")
+DEFAULT_QUERIES_PATH = Path("evals/retrieval/starter/queries.jsonl")
+DEFAULT_TOP_K = 5
+DEFAULT_TIMEOUT_SECONDS = 90
+
+
+def load_jsonl(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for line_number, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            msg = f"invalid JSON on line {line_number} in {path}: {exc}"
+            raise ValueError(msg) from exc
+        if not isinstance(row, dict):
+            msg = f"expected object on line {line_number} in {path}"
+            raise ValueError(msg)
+        rows.append(row)
+    return rows
+
+
+def wait_until_ready(base_url: str, timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS) -> None:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        try:
+            response = httpx.get(f"{base_url}/readyz", timeout=5.0)
+            payload = response.json()
+            if response.status_code == 200 and payload["status"] == "ok":
+                return
+        except (httpx.HTTPError, KeyError, ValueError):
+            pass
+        time.sleep(2)
+    raise RuntimeError("memory-api did not become ready in time")
+
+
+def create_memory(base_url: str, record: dict[str, Any]) -> dict[str, Any]:
+    metadata = dict(record.get("metadata", {}))
+    metadata["eval_dataset_id"] = record["id"]
+    response = httpx.post(
+        f"{base_url}/memories",
+        json={
+            "kind": record["kind"],
+            "scope": record["scope"],
+            "namespace": record["namespace"],
+            "title": record["title"],
+            "content": record["content"],
+            "tags": record.get("tags", []),
+            "source": record.get("source", {"type": "manual"}),
+            "confidence": record.get("confidence", 0.9),
+            "metadata": metadata,
+        },
+        timeout=10.0,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def search_memories(base_url: str, query: dict[str, Any], top_k: int) -> list[dict[str, Any]]:
+    payload: dict[str, Any] = {
+        "query": query["query"],
+        "namespace": query.get("namespace"),
+        "scope": query.get("scope"),
+        "kind": query.get("kind"),
+        "tags": query.get("tags", []),
+        "include_archived": query.get("include_archived", False),
+        "exclude_superseded": query.get("exclude_superseded", False),
+        "limit": query.get("limit", top_k),
+    }
+    response = httpx.post(f"{base_url}/memories/search", json=payload, timeout=10.0)
+    response.raise_for_status()
+    return response.json()["results"]
+
+
+def reciprocal_rank(returned_ids: list[str], relevant_ids: set[str], top_k: int) -> float:
+    for index, result_id in enumerate(returned_ids[:top_k], start=1):
+        if result_id in relevant_ids:
+            return 1.0 / index
+    return 0.0
+
+
+def compute_metrics(query_results: list[dict[str, Any]], top_k: int) -> dict[str, dict[str, float | int]]:
+    total = len(query_results)
+    if total == 0:
+        return {
+            "hit@1": {"value": 0.0, "numerator": 0, "denominator": 0},
+            f"recall@{top_k}": {"value": 0.0, "numerator": 0, "denominator": 0},
+            f"mrr@{top_k}": {"value": 0.0, "numerator": 0.0, "denominator": 0},
+        }
+
+    hit_at_1_numerator = sum(1 for item in query_results if item["hit_at_1"])
+    recall_numerator = sum(1 for item in query_results if item["missing_ids"] == [])
+    mrr_numerator = sum(item["reciprocal_rank"] for item in query_results)
+
+    return {
+        "hit@1": {
+            "value": hit_at_1_numerator / total,
+            "numerator": hit_at_1_numerator,
+            "denominator": total,
+        },
+        f"recall@{top_k}": {
+            "value": recall_numerator / total,
+            "numerator": recall_numerator,
+            "denominator": total,
+        },
+        f"mrr@{top_k}": {
+            "value": mrr_numerator / total,
+            "numerator": mrr_numerator,
+            "denominator": total,
+        },
+    }
+
+
+def summarize_results(result: dict[str, Any]) -> str:
+    top_k = result["top_k"]
+    metrics = result["metrics"]
+    lines = [
+        "Retrieval Eval Summary",
+        f'- Dataset: {result["dataset"]["name"]}',
+        f'- Corpus size: {result["dataset"]["corpus_size"]}',
+        f'- Query count: {result["dataset"]["query_count"]}',
+        f'- Hit@1: {metrics["hit@1"]["numerator"]}/{metrics["hit@1"]["denominator"]} ({metrics["hit@1"]["value"]:.3f})',
+        f'- Recall@{top_k}: {metrics[f"recall@{top_k}"]["numerator"]}/{metrics[f"recall@{top_k}"]["denominator"]} ({metrics[f"recall@{top_k}"]["value"]:.3f})',
+        f'- MRR@{top_k}: {metrics[f"mrr@{top_k}"]["value"]:.3f}',
+        "",
+        "Per-query results:",
+    ]
+    for item in result["queries"]:
+        lines.append(
+            f'- {item["query_id"]}: returned={item["returned_ids"]} found={item["found_ids"]} missing={item["missing_ids"]}'
+        )
+    return "\n".join(lines)
+
+
+def run_eval(
+    *,
+    base_url: str,
+    corpus_path: Path,
+    queries_path: Path,
+    top_k: int,
+) -> dict[str, Any]:
+    wait_until_ready(base_url)
+    corpus = load_jsonl(corpus_path)
+    queries = load_jsonl(queries_path)
+
+    for record in corpus:
+        create_memory(base_url, record)
+
+    query_results: list[dict[str, Any]] = []
+    for query in queries:
+        results = search_memories(base_url, query, top_k)
+        returned_ids = [
+            result.get("metadata", {}).get("eval_dataset_id", result["id"])
+            for result in results[:top_k]
+        ]
+        relevant_ids = set(query["relevant_ids"])
+        found_ids = [result_id for result_id in returned_ids if result_id in relevant_ids]
+        missing_ids = [result_id for result_id in query["relevant_ids"] if result_id not in returned_ids]
+        query_results.append(
+            {
+                "query_id": query["query_id"],
+                "query": query["query"],
+                "notes": query.get("notes"),
+                "relevant_ids": query["relevant_ids"],
+                "returned_ids": returned_ids,
+                "found_ids": found_ids,
+                "missing_ids": missing_ids,
+                "hit_at_1": bool(returned_ids) and returned_ids[0] in relevant_ids,
+                "reciprocal_rank": reciprocal_rank(returned_ids, relevant_ids, top_k),
+            }
+        )
+
+    return {
+        "dataset": {
+            "name": "starter",
+            "corpus_path": str(corpus_path),
+            "queries_path": str(queries_path),
+            "corpus_size": len(corpus),
+            "query_count": len(queries),
+        },
+        "base_url": base_url,
+        "top_k": top_k,
+        "metrics": compute_metrics(query_results, top_k),
+        "queries": query_results,
+    }
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run retrieval evaluation against memory-api.")
+    subparsers = parser.add_subparsers(dest="command")
+
+    run_parser = subparsers.add_parser("run", help="Run retrieval evaluation.")
+    run_parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
+    run_parser.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS_PATH)
+    run_parser.add_argument("--queries", type=Path, default=DEFAULT_QUERIES_PATH)
+    run_parser.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
+    run_parser.add_argument(
+        "--output-format",
+        choices=("json", "summary"),
+        default="summary",
+        help="Choose JSON for machine-readable output or summary for human-readable output.",
+    )
+
+    summary_parser = subparsers.add_parser("summary", help="Render a human-readable summary from a JSON result file.")
+    summary_parser.add_argument("--input", type=Path, required=True)
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.command == "summary":
+        result = json.loads(args.input.read_text(encoding="utf-8"))
+        print(summarize_results(result))
+        return 0
+
+    if args.command in (None, "run"):
+        result = run_eval(
+            base_url=args.base_url,
+            corpus_path=args.corpus,
+            queries_path=args.queries,
+            top_k=args.top_k,
+        )
+        if args.output_format == "json":
+            print(json.dumps(result, indent=2))
+        else:
+            print(summarize_results(result))
+        return 0
+
+    parser.print_help()
+    return 1
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        print(f"retrieval eval failed: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc

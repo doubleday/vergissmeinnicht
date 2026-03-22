@@ -57,6 +57,16 @@ uv run python scripts/smoke_test.py
 
 The smoke test creates a memory, fetches it, searches for it, restarts the target stack, and verifies the memory remains available afterward. It remains useful as a manual check when you want to verify an existing environment directly.
 
+Run the manual retrieval-eval workflow:
+
+```bash
+./scripts/run_retrieval_evals.sh
+```
+
+The retrieval-eval workflow starts its own disposable Docker Compose project, loads the frozen starter dataset from [`evals/retrieval/starter/`](/Users/daniel/Source/myprojects/ai/vergissmeinnicht/evals/retrieval/starter), exercises the live HTTP search API, and saves a machine-readable result under `artifacts/retrieval-evals/` before printing a human-readable summary. It is separate from unit tests and integration tests because it measures retrieval quality rather than functional correctness.
+
+Initial limitation: the active embedder is still `deterministic-local`, so early retrieval-eval scores are useful for workflow establishment and regression comparison, but they should not be treated as strong evidence of real semantic quality.
+
 ## Inspect Backing Stores
 
 Inspect PostgreSQL rows:

@@ -1,0 +1,6 @@
+{"query_id":"q1","query":"Answer directly and avoid unnecessary filler.","namespace":"retrieval-eval","scope":"project","relevant_ids":["m1"],"notes":"Exact content match for current deterministic embedder baseline."}
+{"query_id":"q2","query":"Use bullets when enumerating distinct items.","namespace":"retrieval-eval","scope":"project","relevant_ids":["m2"],"notes":"Exact content match for starter formatting guidance."}
+{"query_id":"q3","query":"Add examples only when they clarify a non-obvious point.","namespace":"retrieval-eval","scope":"project","relevant_ids":["m3"],"notes":"Exact content match for example-usage guidance."}
+{"query_id":"q4","query":"Archive invalid memories instead of deleting canonical history.","namespace":"retrieval-eval","scope":"project","relevant_ids":["m4"],"notes":"Exact content match for lifecycle guidance."}
+{"query_id":"q5","query":"Store repository-specific guidance as project-scoped memory.","namespace":"retrieval-eval","scope":"project","relevant_ids":["m5"],"notes":"Exact content match for scope guidance."}
+{"query_id":"q6","query":"Fall back to lexical search when semantic retrieval yields no candidates.","namespace":"retrieval-eval","scope":"project","relevant_ids":["m6"],"notes":"Exact content match for search fallback guidance."}
