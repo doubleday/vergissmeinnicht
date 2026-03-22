@@ -34,6 +34,7 @@ class PostgresStore:
                         namespace TEXT NOT NULL,
                         title TEXT NOT NULL,
                         content TEXT NOT NULL,
+                        supersedes_memory_id TEXT,
                         tags JSONB NOT NULL DEFAULT '[]'::jsonb,
                         source JSONB NOT NULL,
                         confidence DOUBLE PRECISION NOT NULL,
@@ -43,6 +44,12 @@ class PostgresStore:
                         last_accessed_at TIMESTAMPTZ,
                         archived BOOLEAN NOT NULL DEFAULT FALSE
                     )
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE memories
+                    ADD COLUMN IF NOT EXISTS supersedes_memory_id TEXT
                     """
                 )
                 cur.execute(
@@ -79,10 +86,10 @@ class PostgresStore:
                 cur.execute(
                     """
                     INSERT INTO memories (
-                        id, kind, scope, namespace, title, content, tags, source,
+                        id, kind, scope, namespace, title, content, supersedes_memory_id, tags, source,
                         confidence, metadata, created_at, updated_at, last_accessed_at, archived
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE)
                     RETURNING *
                     """,
                     (
@@ -92,6 +99,7 @@ class PostgresStore:
                         request.namespace,
                         request.title,
                         request.content,
+                        request.supersedes_memory_id,
                         Jsonb(request.tags),
                         Jsonb(request.source.model_dump()),
                         request.confidence,
@@ -121,6 +129,7 @@ class PostgresStore:
                       AND archived = FALSE
                       AND btrim(title) = %s
                       AND btrim(content) = %s
+                      AND supersedes_memory_id IS NOT DISTINCT FROM %s
                     ORDER BY updated_at DESC
                     LIMIT 1
                     """,
@@ -130,6 +139,7 @@ class PostgresStore:
                         request.kind,
                         normalized_title,
                         normalized_content,
+                        request.supersedes_memory_id,
                     ),
                 )
                 row = cur.fetchone()

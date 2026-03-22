@@ -7,6 +7,10 @@ from memory_api.models import MemoryCreate, MemoryRecord, MemorySearchRequest, S
 from memory_api.services.embedding import DeterministicEmbedder
 
 
+class InvalidSupersessionReferenceError(ValueError):
+    pass
+
+
 class PostgresStoreLike(Protocol):
     def init(self) -> None: ...
     def ping(self) -> None: ...
@@ -53,6 +57,7 @@ class MemoryService:
         return checks
 
     def create_memory(self, request: MemoryCreate) -> MemoryRecord:
+        self._validate_supersession_reference(request)
         existing_memory = self.postgres.find_active_duplicate_memory(request)
         if existing_memory is not None:
             return existing_memory
@@ -60,6 +65,18 @@ class MemoryService:
         memory = self.postgres.create_memory(str(uuid4()), request)
         self.qdrant.upsert_memory(memory, self.embedder.embed(memory.content))
         return memory
+
+    def _validate_supersession_reference(self, request: MemoryCreate) -> None:
+        if request.supersedes_memory_id is None:
+            return
+
+        superseded_memory = self.postgres.get_memory(request.supersedes_memory_id, update_access_time=False)
+        if superseded_memory is None:
+            msg = "supersedes_memory_id must reference an existing memory in the same namespace"
+            raise InvalidSupersessionReferenceError(msg)
+        if superseded_memory.namespace != request.namespace:
+            msg = "supersedes_memory_id must reference an existing memory in the same namespace"
+            raise InvalidSupersessionReferenceError(msg)
 
     def get_memory(self, memory_id: str) -> MemoryRecord | None:
         return self.postgres.get_memory(memory_id, update_access_time=True)

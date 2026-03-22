@@ -34,6 +34,7 @@ def build_memory_record(memory_id: str, request: MemoryCreate, *, archived: bool
             "namespace": request.namespace,
             "title": request.title,
             "content": request.content,
+            "supersedes_memory_id": request.supersedes_memory_id,
             "tags": request.tags,
             "source": request.source.model_dump(),
             "confidence": request.confidence,
@@ -144,6 +145,85 @@ def test_create_memory_returns_existing_record_for_duplicate_active_write() -> N
     assert postgres.create_calls == []
     assert qdrant.upserts == []
     assert returned.last_accessed_at == existing.last_accessed_at
+
+
+def test_create_memory_persists_supersession_link_for_same_namespace_reference() -> None:
+    prior = build_memory_record("prior-memory", build_create_request())
+    request = build_create_request(supersedes_memory_id=prior.id)
+    postgres = FakePostgresStore(stored_memories={prior.id: prior})
+    qdrant = FakeQdrantStore()
+    service = MemoryService(postgres=postgres, qdrant=qdrant, embedder=DeterministicEmbedder(8))
+
+    created = service.create_memory(request)
+
+    assert created.supersedes_memory_id == prior.id
+    assert len(postgres.create_calls) == 1
+    assert postgres.create_calls[0][1].supersedes_memory_id == prior.id
+
+
+def test_create_memory_rejects_missing_supersession_reference() -> None:
+    request = build_create_request(supersedes_memory_id="missing-memory")
+    postgres = FakePostgresStore()
+    qdrant = FakeQdrantStore()
+    service = MemoryService(postgres=postgres, qdrant=qdrant, embedder=DeterministicEmbedder(8))
+
+    try:
+        service.create_memory(request)
+    except ValueError as exc:
+        assert str(exc) == "supersedes_memory_id must reference an existing memory in the same namespace"
+    else:
+        raise AssertionError("Expected create_memory to reject a missing supersession reference")
+
+    assert postgres.create_calls == []
+    assert qdrant.upserts == []
+
+
+def test_create_memory_rejects_cross_namespace_supersession_reference() -> None:
+    prior = build_memory_record("prior-memory", build_create_request(namespace="other-project"))
+    request = build_create_request(supersedes_memory_id=prior.id)
+    postgres = FakePostgresStore(stored_memories={prior.id: prior})
+    qdrant = FakeQdrantStore()
+    service = MemoryService(postgres=postgres, qdrant=qdrant, embedder=DeterministicEmbedder(8))
+
+    try:
+        service.create_memory(request)
+    except ValueError as exc:
+        assert str(exc) == "supersedes_memory_id must reference an existing memory in the same namespace"
+    else:
+        raise AssertionError("Expected create_memory to reject a cross-namespace supersession reference")
+
+    assert postgres.create_calls == []
+    assert qdrant.upserts == []
+
+
+def test_duplicate_write_matches_when_supersession_link_matches() -> None:
+    prior = build_memory_record("prior-memory", build_create_request())
+    request = build_create_request(supersedes_memory_id="prior-memory")
+    existing = build_memory_record("existing-memory", request)
+    postgres = FakePostgresStore(duplicate_memory=existing, stored_memories={prior.id: prior})
+    qdrant = FakeQdrantStore()
+    service = MemoryService(postgres=postgres, qdrant=qdrant, embedder=DeterministicEmbedder(8))
+
+    returned = service.create_memory(build_create_request(supersedes_memory_id="prior-memory"))
+
+    assert returned.id == "existing-memory"
+    assert postgres.create_calls == []
+    assert qdrant.upserts == []
+
+
+def test_duplicate_write_creates_new_memory_when_supersession_link_differs() -> None:
+    old_prior = build_memory_record("old-prior-memory", build_create_request())
+    new_prior = build_memory_record("new-prior-memory", build_create_request(title="New prior"))
+    request = build_create_request(supersedes_memory_id="new-prior-memory")
+    postgres = FakePostgresStore(stored_memories={old_prior.id: old_prior, new_prior.id: new_prior})
+    qdrant = FakeQdrantStore()
+    service = MemoryService(postgres=postgres, qdrant=qdrant, embedder=DeterministicEmbedder(8))
+
+    returned = service.create_memory(request)
+
+    assert returned.supersedes_memory_id == "new-prior-memory"
+    assert len(postgres.create_calls) == 1
+    assert qdrant.upserts[0][0].supersedes_memory_id == "new-prior-memory"
 
 
 def test_archived_match_does_not_block_new_write() -> None:

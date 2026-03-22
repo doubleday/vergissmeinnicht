@@ -17,6 +17,7 @@ class MemoryCreate(BaseModel):
     namespace: str = Field(min_length=1)
     title: str = Field(min_length=1)
     content: str = Field(min_length=1)
+    supersedes_memory_id: str | None = None
     tags: list[str] = Field(default_factory=list)
     source: Source
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)

@@ -5,7 +5,7 @@ from fastapi import FastAPI, HTTPException, Request
 from memory_api.config import settings
 from memory_api.models import HealthResponse, MemoryCreate, MemoryRecord, MemorySearchRequest, SearchResponse
 from memory_api.services.embedding import DeterministicEmbedder
-from memory_api.services.memory_service import MemoryService
+from memory_api.services.memory_service import InvalidSupersessionReferenceError, MemoryService
 from memory_api.services.postgres import PostgresStore
 from memory_api.services.qdrant_store import QdrantStore
 
@@ -47,7 +47,10 @@ def readyz(request: Request) -> HealthResponse:
 
 @app.post("/memories", response_model=MemoryRecord)
 def create_memory(request: Request, payload: MemoryCreate) -> MemoryRecord:
-    return get_service(request).create_memory(payload)
+    try:
+        return get_service(request).create_memory(payload)
+    except InvalidSupersessionReferenceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/memories/{memory_id}", response_model=MemoryRecord)
