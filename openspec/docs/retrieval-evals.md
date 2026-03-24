@@ -139,7 +139,7 @@ Those become more useful later, especially if the project adopts graded relevanc
 A pragmatic first version could look like this:
 
 1. Keep unit and integration tests focused on correctness and live-stack wiring.
-2. Add a separate offline evaluation script for semantic search quality.
+2. Add a separate retrieval-eval workflow for semantic search quality.
 3. Use a small frozen dataset and report a few retrieval metrics.
 4. Add lightweight human review for changed queries when search behavior shifts noticeably.
 
