@@ -11,6 +11,9 @@ from uuid import uuid4
 
 import httpx
 
+from memory_api.client import MemoryApiClient
+from memory_api.models import MemoryCreate, MemorySearchRequest, Source
+
 
 BASE_URL = os.environ.get("MEMORY_API_BASE_URL", "http://127.0.0.1:8000")
 DEFAULT_RESTART_COMMAND = os.environ.get("MEMORY_API_RESTART_COMMAND", "docker compose restart memory-api")
@@ -36,39 +39,35 @@ def restart_stack(command: str) -> None:
 
 def create_memory() -> dict:
     suffix = uuid4().hex[:8]
-    response = httpx.post(
-        f"{BASE_URL}/memories",
-        json={
-            "kind": "rule",
-            "scope": "project",
-            "namespace": "smoke-test",
-            "title": f"Smoke Test {suffix}",
-            "content": f"Persistent memory verification payload {suffix}",
-            "tags": ["smoke", "persistence"],
-            "source": {"type": "manual"},
-            "confidence": 0.9,
-            "metadata": {"test_run": suffix},
-        },
-        timeout=10.0,
-    )
-    response.raise_for_status()
-    return response.json()
+    with MemoryApiClient(base_url=BASE_URL) as client:
+        created = client.create_memory(
+            MemoryCreate(
+                kind="rule",
+                scope="project",
+                namespace="smoke-test",
+                title=f"Smoke Test {suffix}",
+                content=f"Persistent memory verification payload {suffix}",
+                tags=["smoke", "persistence"],
+                source=Source(type="manual"),
+                confidence=0.9,
+                metadata={"test_run": suffix},
+            )
+        )
+    return created.model_dump(mode="json", exclude_none=True)
 
 
 def fetch_memory(memory_id: str) -> dict:
-    response = httpx.get(f"{BASE_URL}/memories/{memory_id}", timeout=10.0)
-    response.raise_for_status()
-    return response.json()
+    with MemoryApiClient(base_url=BASE_URL) as client:
+        memory = client.get_memory(memory_id)
+    return memory.model_dump(mode="json", exclude_none=True)
 
 
 def search_memory(query: str) -> list[dict]:
-    response = httpx.post(
-        f"{BASE_URL}/memories/search",
-        json={"query": query, "namespace": "smoke-test", "scope": "project"},
-        timeout=10.0,
-    )
-    response.raise_for_status()
-    return response.json()["results"]
+    with MemoryApiClient(base_url=BASE_URL) as client:
+        response = client.search_memories(
+            MemorySearchRequest(query=query, namespace="smoke-test", scope="project")
+        )
+    return [result.model_dump(mode="json", exclude_none=True) for result in response.results]
 
 
 def ensure_memory_visible(memory: dict) -> None:
@@ -98,9 +97,15 @@ def verify_restart(memory_id: str, expected_title: str, expected_content: str) -
     wait_until_ready()
     fetched_after = fetch_memory(memory_id)
     if fetched_after["title"] != expected_title:
-        raise RuntimeError("memory title changed after restart")
+        raise RuntimeError(
+            "memory title changed after restart: "
+            f"expected {expected_title!r}, got {fetched_after['title']!r}"
+        )
     if fetched_after["content"] != expected_content:
-        raise RuntimeError("memory content changed after restart")
+        raise RuntimeError(
+            "memory content changed after restart: "
+            f"expected {expected_content!r}, got {fetched_after['content']!r}"
+        )
 
     search_results = search_memory(expected_content)
     if not any(item["id"] == memory_id for item in search_results):

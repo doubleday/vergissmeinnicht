@@ -33,6 +33,35 @@ Local memory service foundation for coding agents and automation.
    curl http://127.0.0.1:8000/readyz
    ```
 
+## Python Client
+
+The first Milestone D adapter slice is a thin typed Python client over the existing four memory endpoints. It stays at the current API boundary and is intended to be the shared base for later CLI and MCP work.
+
+```python
+from memory_api import MemoryApiClient
+from memory_api.models import MemoryCreate, MemorySearchRequest
+
+with MemoryApiClient(base_url="http://127.0.0.1:8000") as client:
+    created = client.create_memory(
+        MemoryCreate(
+            kind="rule",
+            scope="project",
+            namespace="demo",
+            title="Keep responses concise",
+            content="Prefer direct answers unless more detail is requested.",
+            tags=["style"],
+            source={"type": "manual"},
+        )
+    )
+    fetched = client.get_memory(created.id)
+    results = client.search_memories(
+        MemorySearchRequest(query="direct answers", namespace="demo", scope="project")
+    )
+    archived = client.archive_memory(created.id)
+```
+
+The client intentionally does not include readiness calls, retries, MCP behavior, or CLI-oriented helper methods.
+
 ## Verification
 
 Run the fast unit tests:
