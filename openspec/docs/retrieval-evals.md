@@ -40,15 +40,16 @@ Reasons:
 
 However, the repository is not yet in a good place to treat retrieval-eval scores as strong evidence about real semantic quality.
 
-Current limitation:
+Current default:
 
-- The active embedder is still the deterministic local placeholder rather than a real semantic embedding provider.
+- The default embedder remains `deterministic-local` so fast tests and zero-dependency local runs stay hermetic.
 
 Practical implication:
 
 - It is useful to start eval scaffolding now.
-- It is not useful to over-interpret the resulting scores yet.
+- It is not useful to over-interpret scores from the deterministic mode.
 - The first milestone should establish workflow and reviewability, not claim that the current search stack is semantically strong.
+- Real semantic-quality runs should opt into a real embedding provider configuration.
 
 ## Possible Evaluation Shape
 
@@ -214,12 +215,24 @@ Current implementation shape:
 
 This keeps retrieval evals grounded in the real live-stack behavior while preserving separation from ordinary tests.
 
+For higher-signal local runs, the stack can be started with:
+
+```bash
+EMBEDDING_PROVIDER=sentence-transformer-local
+EMBEDDING_MODEL_NAME=BAAI/bge-small-en-v1.5
+EMBEDDING_DIMENSIONS=384
+EMBEDDING_DEVICE=cpu
+MEMORY_QDRANT_COLLECTION=memories_retrieval_eval_bge_small
+```
+
+When switching provider, model, or vector dimensions, use a clean Qdrant collection or a separate collection name. Reusing a collection populated by another embedding runtime is not a supported evaluation baseline.
+
 ## What Not To Do
 
 - Do not treat exact semantic ranking order as a stable unit-test contract.
 - Do not assume one or two hand-written example queries are enough to measure quality.
 - Do not mix relevance judgments into normal integration tests unless the expectation is very narrow and deterministic.
-- Do not treat early scores from the deterministic placeholder embedder as strong evidence about real semantic quality.
+- Do not treat scores from the deterministic placeholder embedder as strong evidence about real semantic quality.
 
 ## Recommended Scope For A First Change
 

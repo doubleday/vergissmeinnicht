@@ -6,7 +6,7 @@ from uuid import uuid4
 from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
 
 from memory_api.models import MemoryCreate, MemoryRecord, MemorySearchRequest, SearchResponse
-from memory_api.services.embedding import DeterministicEmbedder
+from memory_api.services.embedding import Embedder
 
 
 class InvalidSupersessionReferenceError(ValueError):
@@ -41,7 +41,7 @@ class MemoryService:
         self,
         postgres: PostgresStoreLike,
         qdrant: QdrantStoreLike,
-        embedder: DeterministicEmbedder,
+        embedder: Embedder,
     ) -> None:
         self.postgres = postgres
         self.qdrant = qdrant

@@ -1,6 +1,8 @@
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from memory_api.services.embedding import DEFAULT_SENTENCE_TRANSFORMER_DEVICE, DEFAULT_SENTENCE_TRANSFORMER_MODEL
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
@@ -21,6 +23,8 @@ class Settings(BaseSettings):
 
     embedding_provider: str = Field(default="deterministic-local")
     embedding_dimensions: int = Field(default=32)
+    embedding_model_name: str = Field(default=DEFAULT_SENTENCE_TRANSFORMER_MODEL)
+    embedding_device: str = Field(default=DEFAULT_SENTENCE_TRANSFORMER_DEVICE)
 
     @property
     def postgres_dsn(self) -> str:

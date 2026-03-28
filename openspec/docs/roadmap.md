@@ -7,7 +7,7 @@ Outcome: a local stack that starts with one command and persists memory across r
 Deliverables:
 
 - Docker Compose for `memory-api`, `postgres`, and `qdrant`
-- Environment configuration for database and embedding provider settings
+- Environment configuration for database and embedding provider settings, including a deterministic local provider for tests and fallback plus optional real-provider runtime settings for semantic evaluation
 - Basic health and startup checks
 
 Success criteria:
@@ -72,5 +72,6 @@ Success criteria:
 ## Testing And Evals
 
 - Unit and integration tests cover functional correctness, API behavior, and service wiring.
-- Semantic search quality is a separate eval concern and should not be treated as a deterministic functional-test problem.
-- Retrieval evals can be added later as their own workflow, dataset, and metrics once real semantic quality work becomes a priority.
+- Retrieval evaluation exists as a separate manual workflow and should remain outside the default unit-test and integration-test commands.
+- While the active runtime embedder is `deterministic-local`, retrieval-eval results are useful for workflow validation and regression comparison but should not be treated as strong evidence of real semantic quality.
+- The next meaningful retrieval-quality milestone is support for a real embedding provider while preserving deterministic embeddings for hermetic tests and local fallback.

@@ -65,7 +65,18 @@ Run the manual retrieval-eval workflow:
 
 The retrieval-eval workflow starts its own disposable Docker Compose project, loads the frozen starter dataset from [`evals/retrieval/starter/`](/Users/daniel/Source/myprojects/ai/vergissmeinnicht/evals/retrieval/starter), exercises the live HTTP search API, and saves a machine-readable result under `artifacts/retrieval-evals/` before printing a human-readable summary. It is separate from unit tests and integration tests because it measures retrieval quality rather than functional correctness.
 
-Initial limitation: the active embedder is still `deterministic-local`, so early retrieval-eval scores are useful for workflow establishment and regression comparison, but they should not be treated as strong evidence of real semantic quality.
+By default, the stack still uses `deterministic-local`, which keeps unit tests, integration tests, and zero-dependency local runs hermetic. Retrieval-eval scores from that mode are useful for workflow establishment and regression comparison, but they should not be treated as strong evidence of real semantic quality.
+
+To run a local real-embedding configuration, set:
+
+```bash
+EMBEDDING_PROVIDER=sentence-transformer-local
+EMBEDDING_MODEL_NAME=BAAI/bge-small-en-v1.5
+EMBEDDING_DIMENSIONS=384
+EMBEDDING_DEVICE=cpu
+```
+
+When switching provider, model, or vector dimensions, use a clean Qdrant collection or a different collection name such as `memories_bge_small`. Existing vectors from another embedding runtime are not a supported mixed-runtime steady state.
 
 ## Inspect Backing Stores
 

@@ -2,19 +2,20 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 
-from memory_api.config import settings
+from memory_api.config import Settings, settings
 from memory_api.models import HealthResponse, MemoryCreate, MemoryRecord, MemorySearchRequest, SearchResponse
-from memory_api.services.embedding import DeterministicEmbedder
+from memory_api.services.embedding import build_embedder
 from memory_api.services.memory_service import InvalidSupersessionReferenceError, MemoryService
 from memory_api.services.postgres import PostgresStore
 from memory_api.services.qdrant_store import QdrantStore
 
 
-def build_service() -> MemoryService:
+def build_service(app_settings: Settings = settings) -> MemoryService:
+    embedder = build_embedder(app_settings)
     return MemoryService(
-        postgres=PostgresStore(settings.postgres_dsn),
-        qdrant=QdrantStore(settings.qdrant_url, settings.memory_qdrant_collection, settings.embedding_dimensions),
-        embedder=DeterministicEmbedder(settings.embedding_dimensions),
+        postgres=PostgresStore(app_settings.postgres_dsn),
+        qdrant=QdrantStore(app_settings.qdrant_url, app_settings.memory_qdrant_collection, embedder.dimensions),
+        embedder=embedder,
     )
 
 
