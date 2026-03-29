@@ -163,6 +163,8 @@ Now let's create a change to hold our work.
 
 A "change" in OpenSpec is a container for all the thinking and planning around a piece of work. It lives in `openspec/changes/<name>/` and holds your artifacts—proposal, specs, design, tasks.
 
+Active changes use plain kebab-case names. Date-prefixed names like `YYYY-MM-DD-<name>` are only for archived changes under `openspec/changes/archive/`.
+
 Let me create one for our task.
 ```
 

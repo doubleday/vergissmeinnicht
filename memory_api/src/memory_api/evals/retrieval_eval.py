@@ -16,6 +16,7 @@ DEFAULT_CORPUS_PATH = Path("evals/retrieval/starter/corpus.jsonl")
 DEFAULT_QUERIES_PATH = Path("evals/retrieval/starter/queries.jsonl")
 DEFAULT_TOP_K = 5
 DEFAULT_TIMEOUT_SECONDS = 90
+DEFAULT_DATASET_NAME = "starter"
 
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -95,6 +96,27 @@ def reciprocal_rank(returned_ids: list[str], relevant_ids: set[str], top_k: int)
     return 0.0
 
 
+def precision_at_k(query_results: list[dict[str, Any]], top_k: int) -> dict[str, float | int]:
+    relevant_returned = sum(len(item["found_ids"]) for item in query_results)
+    returned_total = sum(min(len(item["returned_ids"]), top_k) for item in query_results)
+    if returned_total == 0:
+        return {"value": 0.0, "numerator": 0, "denominator": 0}
+    return {
+        "value": relevant_returned / returned_total,
+        "numerator": relevant_returned,
+        "denominator": returned_total,
+    }
+
+
+def expected_empty_success(query_results: list[dict[str, Any]]) -> dict[str, float | int]:
+    expected_empty_queries = [item for item in query_results if item["expected_empty"]]
+    total = len(expected_empty_queries)
+    if total == 0:
+        return {"value": 0.0, "numerator": 0, "denominator": 0}
+    passed = sum(1 for item in expected_empty_queries if item["expected_empty_pass"])
+    return {"value": passed / total, "numerator": passed, "denominator": total}
+
+
 def compute_metrics(query_results: list[dict[str, Any]], top_k: int) -> dict[str, dict[str, float | int]]:
     total = len(query_results)
     if total == 0:
@@ -102,6 +124,8 @@ def compute_metrics(query_results: list[dict[str, Any]], top_k: int) -> dict[str
             "hit@1": {"value": 0.0, "numerator": 0, "denominator": 0},
             f"recall@{top_k}": {"value": 0.0, "numerator": 0, "denominator": 0},
             f"mrr@{top_k}": {"value": 0.0, "numerator": 0.0, "denominator": 0},
+            "expected-empty": {"value": 0.0, "numerator": 0, "denominator": 0},
+            f"precision@{top_k}": {"value": 0.0, "numerator": 0, "denominator": 0},
         }
 
     hit_at_1_numerator = sum(1 for item in query_results if item["hit_at_1"])
@@ -124,28 +148,46 @@ def compute_metrics(query_results: list[dict[str, Any]], top_k: int) -> dict[str
             "numerator": mrr_numerator,
             "denominator": total,
         },
+        "expected-empty": expected_empty_success(query_results),
+        f"precision@{top_k}": precision_at_k(query_results, top_k),
     }
 
 
 def summarize_results(result: dict[str, Any]) -> str:
     top_k = result["top_k"]
     metrics = result["metrics"]
+    runtime = result.get("runtime", {})
     lines = [
         "Retrieval Eval Summary",
         f'- Dataset: {result["dataset"]["name"]}',
         f'- Corpus size: {result["dataset"]["corpus_size"]}',
         f'- Query count: {result["dataset"]["query_count"]}',
+        f'- Embedding provider: {runtime.get("embedding_provider", "unknown")}',
         f'- Hit@1: {metrics["hit@1"]["numerator"]}/{metrics["hit@1"]["denominator"]} ({metrics["hit@1"]["value"]:.3f})',
         f'- Recall@{top_k}: {metrics[f"recall@{top_k}"]["numerator"]}/{metrics[f"recall@{top_k}"]["denominator"]} ({metrics[f"recall@{top_k}"]["value"]:.3f})',
         f'- MRR@{top_k}: {metrics[f"mrr@{top_k}"]["value"]:.3f}',
+        f'- Expected-empty: {metrics["expected-empty"]["numerator"]}/{metrics["expected-empty"]["denominator"]} ({metrics["expected-empty"]["value"]:.3f})',
+        f'- Precision@{top_k}: {metrics[f"precision@{top_k}"]["numerator"]}/{metrics[f"precision@{top_k}"]["denominator"]} ({metrics[f"precision@{top_k}"]["value"]:.3f})',
         "",
         "Per-query results:",
     ]
     for item in result["queries"]:
         lines.append(
-            f'- {item["query_id"]}: returned={item["returned_ids"]} found={item["found_ids"]} missing={item["missing_ids"]}'
+            f'- {item["query_id"]}: returned={item["returned_ids"]} found={item["found_ids"]} '
+            f'missing={item["missing_ids"]} unexpected={item["unexpected_ids"]} '
+            f'expected_empty={item["expected_empty"]} pass={item["expected_empty_pass"]}'
         )
     return "\n".join(lines)
+
+
+def build_runtime_metadata() -> dict[str, str]:
+    return {
+        "embedding_provider": os.environ.get("EMBEDDING_PROVIDER", "unknown"),
+        "embedding_model_name": os.environ.get("EMBEDDING_MODEL_NAME", ""),
+        "embedding_dimensions": os.environ.get("EMBEDDING_DIMENSIONS", ""),
+        "embedding_device": os.environ.get("EMBEDDING_DEVICE", ""),
+        "memory_qdrant_collection": os.environ.get("MEMORY_QDRANT_COLLECTION", ""),
+    }
 
 
 def run_eval(
@@ -170,8 +212,10 @@ def run_eval(
             for result in results[:top_k]
         ]
         relevant_ids = set(query["relevant_ids"])
+        expected_empty = bool(query.get("expected_empty", False))
         found_ids = [result_id for result_id in returned_ids if result_id in relevant_ids]
         missing_ids = [result_id for result_id in query["relevant_ids"] if result_id not in returned_ids]
+        unexpected_ids = [result_id for result_id in returned_ids if result_id not in relevant_ids]
         query_results.append(
             {
                 "query_id": query["query_id"],
@@ -181,6 +225,9 @@ def run_eval(
                 "returned_ids": returned_ids,
                 "found_ids": found_ids,
                 "missing_ids": missing_ids,
+                "unexpected_ids": unexpected_ids,
+                "expected_empty": expected_empty,
+                "expected_empty_pass": expected_empty and not returned_ids,
                 "hit_at_1": bool(returned_ids) and returned_ids[0] in relevant_ids,
                 "reciprocal_rank": reciprocal_rank(returned_ids, relevant_ids, top_k),
             }
@@ -188,13 +235,14 @@ def run_eval(
 
     return {
         "dataset": {
-            "name": "starter",
+            "name": DEFAULT_DATASET_NAME,
             "corpus_path": str(corpus_path),
             "queries_path": str(queries_path),
             "corpus_size": len(corpus),
             "query_count": len(queries),
         },
         "base_url": base_url,
+        "runtime": build_runtime_metadata(),
         "top_k": top_k,
         "metrics": compute_metrics(query_results, top_k),
         "queries": query_results,

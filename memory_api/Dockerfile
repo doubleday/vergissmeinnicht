@@ -27,7 +27,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 EXPOSE 8000
 
-CMD ["uv", "run", "uvicorn", "memory_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["/app/.venv/bin/uvicorn", "memory_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 FROM base AS test-deps
 
@@ -47,4 +47,4 @@ COPY tests_integration /app/tests_integration
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --dev
 
-CMD ["uv", "run", "pytest", "tests_integration"]
+CMD ["/app/.venv/bin/pytest", "tests_integration"]

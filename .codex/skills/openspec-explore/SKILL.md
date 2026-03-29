@@ -86,6 +86,10 @@ At the start, quickly check what exists:
 openspec list --json
 ```
 
+Naming convention reminder:
+- Active changes live at `openspec/changes/<name>/` and use plain kebab-case slugs.
+- Date prefixes like `YYYY-MM-DD-<name>` are for archived changes under `openspec/changes/archive/`.
+
 This tells you:
 - If there are active changes
 - Their names, schemas, and status

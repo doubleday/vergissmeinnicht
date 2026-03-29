@@ -13,6 +13,10 @@ Start a new change using the experimental artifact-driven approach.
 
 **Input**: The user's request should include a change name (kebab-case) OR a description of what they want to build.
 
+Naming convention reminder:
+- Active changes use plain kebab-case slugs under `openspec/changes/<name>/`.
+- Date-prefixed names like `YYYY-MM-DD-<name>` are reserved for archived changes under `openspec/changes/archive/`.
+
 **Steps**
 
 1. **If no clear input provided, ask what they want to build**

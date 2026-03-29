@@ -58,6 +58,7 @@ One reasonable approach would be to create a small frozen evaluation set:
 - A curated memory corpus
 - A set of representative search queries
 - Expected relevant memory ids for each query
+- Explicit expected-non-match queries whose correct outcome is no returned result
 - Optional graded relevance such as high, medium, or irrelevant
 
 That set could then be used to compare search behavior over time.
@@ -92,6 +93,7 @@ Suggested `queries.jsonl` shape:
 ```json
 {"query_id":"q1","query":"brief replies","relevant_ids":["m1"],"notes":"semantic paraphrase"}
 {"query_id":"q2","query":"list formatting","relevant_ids":["m2"],"notes":"concept match"}
+{"query_id":"q3","query":"weather tomorrow","relevant_ids":[],"expected_empty":true,"notes":"negative query"}
 ```
 
 Recommended first scale:
@@ -120,12 +122,16 @@ The first metric set should stay minimal:
 - Hit@1
 - Recall@5
 - Mean Reciprocal Rank at 5 (MRR@5)
+- Expected-empty success rate
+- Precision@5
 
 Why this mix:
 
 - Hit@1 is easy to reason about during manual review.
 - Recall@5 shows whether relevant memories are being found at all.
 - MRR@5 shows whether the first relevant result is near the top.
+- Expected-empty success rate exposes clearly unrelated queries that still return a memory.
+- Precision@5 exposes irrelevant tail results even when a relevant item still ranks first.
 
 Metrics to defer for now:
 
@@ -152,11 +158,14 @@ Each eval run should report:
 
 - Overall metrics
 - Per-query result summaries
+- Unexpected ids for each query
 - Queries whose results changed relative to a prior baseline
 
 Good review questions:
 
 - Did any query lose all relevant hits?
+- Did any expected-empty query incorrectly return a memory?
+- Which returned ids were clearly unrelated to the query?
 - Did top-1 get worse for important queries?
 - Are failures caused by retrieval quality or by functional behavior such as filtering or fallback?
 - Did the change alter only one or two queries, or did it broadly shift the ranking profile?
@@ -168,10 +177,13 @@ Overall
 - Hit@1: 6/12
 - Recall@5: 10/12
 - MRR@5: 0.63
+- Expected-empty: 2/4
+- Precision@5: 0.42
 
 Changed queries
 - q1 "brief replies": m1 moved from rank 1 to rank 4
 - q4 "meeting reminders": no relevant hit in top 5
+- q7 "weather tomorrow": returned m3 unexpectedly
 - q7 "archived note search": unchanged, still uses fallback behavior
 ```
 
@@ -201,19 +213,38 @@ That keeps the workflow lightweight while preserving the existing testing split.
 The repository now includes a first manual retrieval-eval workflow:
 
 ```bash
-./scripts/run_retrieval_evals.sh
+./scripts/run_retrieval_evals.sh setup
+./scripts/run_retrieval_evals.sh run
 ```
 
 Current implementation shape:
 
-- uses a disposable Docker Compose project rather than the default local stack
+- uses a reusable local retrieval-eval Docker Compose project rather than the default local stack
 - loads a frozen starter dataset from `evals/retrieval/starter/`
 - creates memories through the normal create-memory API
 - executes representative queries through the normal search API
 - saves machine-readable JSON output under `artifacts/retrieval-evals/`
 - prints a compact human-readable summary for review
+- records the embedding runtime metadata used for the run so deterministic and real-provider outputs can be compared intentionally
 
 This keeps retrieval evals grounded in the real live-stack behavior while preserving separation from ordinary tests.
+
+Available local lifecycle commands:
+
+```bash
+./scripts/run_retrieval_evals.sh setup
+./scripts/run_retrieval_evals.sh start
+./scripts/run_retrieval_evals.sh reset
+./scripts/run_retrieval_evals.sh run
+./scripts/run_retrieval_evals.sh cleanup
+```
+
+Recommended usage:
+
+- `setup` once before the first run, or again after Dockerfile or dependency changes
+- `run` for ordinary retrieval-eval iterations
+- `reset` when you want a clean isolated eval data state without rebuilding images
+- `cleanup` when you want to remove the reusable eval runtime entirely
 
 For higher-signal local runs, the stack can be started with:
 
@@ -226,6 +257,14 @@ MEMORY_QDRANT_COLLECTION=memories_retrieval_eval_bge_small
 ```
 
 When switching provider, model, or vector dimensions, use a clean Qdrant collection or a separate collection name. Reusing a collection populated by another embedding runtime is not a supported evaluation baseline.
+
+Recommended interpretation:
+
+- `deterministic-local` runs are useful for hermetic regression checks and eval-workflow validation.
+- Real-provider runs are the better signal for retrieval-quality iteration.
+- Compare runs only when the saved runtime metadata matches the provider and collection setup you intended to evaluate.
+
+The reusable retrieval-eval runtime remains separate from the default local stack through its own Compose file, fixed project name, dedicated volumes, and eval-specific Qdrant collection. Reset the eval runtime when you want fresh retrieval state. Rebuild only when the runtime definition or dependencies change.
 
 ## What Not To Do
 

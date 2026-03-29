@@ -4,3 +4,5 @@
 {"query_id":"q4","query":"Archive invalid memories instead of deleting canonical history.","namespace":"retrieval-eval","scope":"project","relevant_ids":["m4"],"notes":"Exact content match for lifecycle guidance."}
 {"query_id":"q5","query":"Store repository-specific guidance as project-scoped memory.","namespace":"retrieval-eval","scope":"project","relevant_ids":["m5"],"notes":"Exact content match for scope guidance."}
 {"query_id":"q6","query":"Fall back to lexical search when semantic retrieval yields no candidates.","namespace":"retrieval-eval","scope":"project","relevant_ids":["m6"],"notes":"Exact content match for search fallback guidance."}
+{"query_id":"q7","query":"How do I reset a forgotten banking password?","namespace":"retrieval-eval","scope":"project","relevant_ids":[],"expected_empty":true,"notes":"Clearly unrelated consumer-support query that should not match the starter memory corpus."}
+{"query_id":"q8","query":"What is the weather forecast for Berlin this weekend?","namespace":"retrieval-eval","scope":"project","relevant_ids":[],"expected_empty":true,"notes":"Clearly unrelated weather query used to expose false positives in tiny datasets."}

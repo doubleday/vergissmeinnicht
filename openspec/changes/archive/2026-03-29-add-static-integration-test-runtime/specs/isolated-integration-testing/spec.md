@@ -1,8 +1,4 @@
-## Purpose
-
-Define the isolated integration-test workflow for the live memory service stack, including Docker-managed dependencies, internal-network test execution, deterministic reset behavior, and the boundary between functional verification and manual smoke checks.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Disposable Integration Test Stack
 
@@ -46,41 +42,3 @@ The integration workflow MUST NOT require reuse of the default host ports, defau
 - **WHEN** the integration workflow writes PostgreSQL rows or Qdrant data during a run
 - **THEN** those writes are stored only in the integration runtime's isolated test resources
 - **AND** the workflow does not depend on or mutate the default development persistence resources
-
-### Requirement: Real Service-Boundary Verification
-
-The integration workflow MUST verify the live HTTP API against real PostgreSQL and Qdrant dependencies.
-
-The integration workflow MUST exercise the same external API contract used by clients rather than calling internal service classes directly.
-
-#### Scenario: Verify readiness and core lifecycle operations
-
-- **WHEN** the integration workflow runs against its isolated test environment
-- **THEN** it verifies that the API reports ready only after its dependencies are reachable
-- **AND** it verifies successful create, fetch, search, and archive operations through the HTTP API
-
-#### Scenario: Verify retrieval-backed search behavior through the live stack
-
-- **WHEN** the integration workflow creates test memories and performs a query through the HTTP API
-- **THEN** the workflow verifies that the returned search results include the expected memory records from the live stack
-
-### Requirement: Internal-Network Test Execution
-
-The integration test workflow MUST support executing its assertions without requiring the default API host port on the developer machine.
-
-#### Scenario: Run tests without binding the default API host port
-
-- **WHEN** the integration workflow executes its test assertions
-- **THEN** the assertions can reach `memory-api` through the integration environment's internal runtime network
-- **AND** the workflow does not require exclusive access to the default host port used by local development
-
-### Requirement: Documented Verification Paths
-
-The project MUST document the difference between unit tests, isolated integration tests, and manual smoke verification.
-
-#### Scenario: Choose the appropriate verification path
-
-- **WHEN** a developer reads the project verification documentation
-- **THEN** the documentation identifies which command runs fast unit tests
-- **AND** the documentation identifies which command runs isolated integration tests
-- **AND** the documentation explains whether manual smoke verification remains available and when to use it

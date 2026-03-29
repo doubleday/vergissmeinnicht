@@ -94,10 +94,23 @@ uv run pytest
 Run the isolated integration suite:
 
 ```bash
-./scripts/run_integration_tests.sh
+./scripts/run_integration_tests.sh setup
+./scripts/run_integration_tests.sh run
 ```
 
-The integration workflow starts a dedicated Docker Compose project from [`docker-compose.integration.yml`](/Users/daniel/Source/myprojects/ai/vergissmeinnicht/docker-compose.integration.yml), runs the live-stack tests from an internal `test-runner` container, restarts `memory-api` inside that isolated project, and tears the whole environment down with `down -v` when finished. It does not require the default local stack to be running and does not reuse its fixed ports or persistent volumes.
+The integration workflow uses a reusable isolated Docker Compose project from [`docker-compose.integration-static.yml`](/Users/daniel/Source/myprojects/ai/vergissmeinnicht/docker-compose.integration-static.yml). It restores clean PostgreSQL and Qdrant state before each run, executes the live-stack tests from an internal `test-runner` container, restarts `memory-api` inside that isolated project, and runs the smoke verification flow. It does not require the default local stack to be running and does not reuse its fixed ports or persistent volumes.
+
+Available lifecycle commands:
+
+```bash
+./scripts/run_integration_tests.sh setup
+./scripts/run_integration_tests.sh start
+./scripts/run_integration_tests.sh reset
+./scripts/run_integration_tests.sh run
+./scripts/run_integration_tests.sh cleanup
+```
+
+Use `setup` the first time or after Dockerfile/dependency changes, `run` for ordinary isolated integration verification, `reset` when you want to reestablish a clean deterministic test state without rebuilding images, and `cleanup` when you want to remove the reusable integration stack entirely.
 
 Run the manual smoke test against an already running stack:
 
@@ -110,12 +123,31 @@ The smoke test creates a memory, fetches it, searches for it, restarts the targe
 Run the manual retrieval-eval workflow:
 
 ```bash
-./scripts/run_retrieval_evals.sh
+./scripts/run_retrieval_evals.sh setup
+./scripts/run_retrieval_evals.sh run
 ```
 
-The retrieval-eval workflow starts its own disposable Docker Compose project, loads the frozen starter dataset from [`evals/retrieval/starter/`](/Users/daniel/Source/myprojects/ai/vergissmeinnicht/evals/retrieval/starter), exercises the live HTTP search API, and saves a machine-readable result under `artifacts/retrieval-evals/` before printing a human-readable summary. It is separate from unit tests and integration tests because it measures retrieval quality rather than functional correctness.
+The retrieval-eval workflow uses a reusable local Docker Compose project instead of a fresh timestamped project on every run. It loads the frozen starter dataset from [`evals/retrieval/starter/`](/Users/daniel/Source/myprojects/ai/vergissmeinnicht/evals/retrieval/starter), exercises the live HTTP search API, and saves a machine-readable result under `artifacts/retrieval-evals/` before printing a human-readable summary. It is separate from unit tests and integration tests because it measures retrieval quality rather than functional correctness.
+
+Available lifecycle commands:
+
+```bash
+./scripts/run_retrieval_evals.sh setup
+./scripts/run_retrieval_evals.sh start
+./scripts/run_retrieval_evals.sh reset
+./scripts/run_retrieval_evals.sh run
+./scripts/run_retrieval_evals.sh cleanup
+```
+
+Use `setup` the first time or after Dockerfile/dependency changes, `run` for ordinary eval iterations, `reset` when you want a fresh isolated eval data state before the next run, and `cleanup` when you want to remove the reusable eval stack entirely.
+
+The starter query set now includes both positive-match queries and explicit expected-non-match queries. The saved result reports `unexpected_ids`, expected-empty success, and `precision@k` so false positives are visible even when a relevant hit still ranks first.
 
 By default, the stack still uses `deterministic-local`, which keeps unit tests, integration tests, and zero-dependency local runs hermetic. Retrieval-eval scores from that mode are useful for workflow establishment and regression comparison, but they should not be treated as strong evidence of real semantic quality.
+
+Each saved retrieval-eval result also records embedding runtime metadata such as provider, model name, dimensions, device, and collection name. Use that metadata to compare like-for-like runs rather than mixing deterministic and real-provider outputs implicitly.
+
+The reusable retrieval-eval stack stays isolated from the default local `docker compose up` stack through its own Compose file, project name, volumes, and eval-specific Qdrant collection. It is meant for repeatable quality runs, not general manual API work.
 
 To run a local real-embedding configuration, set:
 
@@ -127,6 +159,18 @@ EMBEDDING_DEVICE=cpu
 ```
 
 When switching provider, model, or vector dimensions, use a clean Qdrant collection or a different collection name such as `memories_bge_small`. Existing vectors from another embedding runtime are not a supported mixed-runtime steady state.
+
+## OpenSpec Change Naming
+
+Active OpenSpec changes under `openspec/changes/` use plain kebab-case slugs such as `add-memory-cli`.
+
+Archived changes under `openspec/changes/archive/` use a date-prefixed form such as `2026-03-29-add-memory-cli`.
+
+To catch accidental date-prefixed active changes, run:
+
+```bash
+uv run python scripts/check_openspec_change_names.py
+```
 
 ## Inspect Backing Stores
 

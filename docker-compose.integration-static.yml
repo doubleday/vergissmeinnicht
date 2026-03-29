@@ -6,28 +6,29 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-memory}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-memory}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - integration_postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-memory} -d ${POSTGRES_DB:-memory}"]
       interval: 5s
       timeout: 5s
       retries: 12
     networks:
-      - memory_net
+      - integration_net
 
   qdrant:
     image: qdrant/qdrant:v1.15.4
     volumes:
-      - qdrant_data:/qdrant/storage
+      - integration_qdrant_data:/qdrant/storage
     healthcheck:
       test: ["CMD", "/qdrant/qdrant", "--help"]
       interval: 5s
       timeout: 5s
       retries: 12
     networks:
-      - memory_net
+      - integration_net
 
   memory-api:
+    image: vergissmeinnicht-integration-memory-api:latest
     build:
       context: .
       dockerfile: memory_api/Dockerfile
@@ -61,9 +62,10 @@ services:
       timeout: 5s
       retries: 12
     networks:
-      - memory_net
+      - integration_net
 
   test-runner:
+    image: vergissmeinnicht-integration-test-runner:latest
     build:
       context: .
       dockerfile: memory_api/Dockerfile
@@ -79,12 +81,12 @@ services:
       memory-api:
         condition: service_healthy
     networks:
-      - memory_net
+      - integration_net
 
 volumes:
-  postgres_data:
-  qdrant_data:
+  integration_postgres_data:
+  integration_qdrant_data:
 
 networks:
-  memory_net:
+  integration_net:
     driver: bridge
