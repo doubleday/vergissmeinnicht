@@ -16,15 +16,26 @@ if [[ $# -gt 0 ]]; then
   shift
 fi
 
+python_cmd=()
+if command -v uv >/dev/null 2>&1; then
+  python_cmd=(uv run python)
+elif [[ -x ".venv/bin/python" ]]; then
+  python_cmd=(.venv/bin/python)
+else
+  echo "Missing Python runner. Install uv or create .venv/bin/python." >&2
+  exit 1
+fi
+
 usage() {
   cat <<'EOF'
-Usage: ./scripts/run_retrieval_evals.sh [setup|start|reset|run|cleanup]
+Usage: ./scripts/run_retrieval_evals.sh [setup|start|reset|run|compare|cleanup]
 
 Commands:
   setup    Build the reusable retrieval-eval images.
   start    Start the reusable retrieval-eval stack without rebuilding images.
   reset    Recreate retrieval-eval data volumes and restart the stack without rebuilding images.
   run      Start the stack if needed, run the eval, save a JSON artifact, and print a summary.
+  compare  Compare two saved retrieval-eval JSON artifacts.
   cleanup  Remove the reusable retrieval-eval containers, volumes, and images.
 EOF
 }
@@ -52,7 +63,15 @@ run_eval() {
   "${compose_cmd[@]}" run --rm --no-deps -T test-runner \
     /app/.venv/bin/python scripts/retrieval_eval.py run --output-format json > "$result_path"
   echo "Saved retrieval-eval result: ${result_path}"
-  uv run python scripts/retrieval_eval.py summary --input "$result_path"
+  "${python_cmd[@]}" scripts/retrieval_eval.py summary --input "$result_path"
+}
+
+compare_eval() {
+  if [[ $# -ne 2 ]]; then
+    echo "Usage: ./scripts/run_retrieval_evals.sh compare <baseline.json> <candidate.json>" >&2
+    exit 1
+  fi
+  "${python_cmd[@]}" scripts/retrieval_eval.py compare --baseline "$1" --candidate "$2"
 }
 
 echo "Using retrieval-eval compose project: ${project_name}"
@@ -71,6 +90,9 @@ case "$command" in
     ;;
   run)
     run_eval
+    ;;
+  compare)
+    compare_eval "$@"
     ;;
   cleanup)
     "${compose_cmd[@]}" down -v --remove-orphans --rmi local

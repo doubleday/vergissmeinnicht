@@ -17,6 +17,19 @@ DEFAULT_QUERIES_PATH = Path("evals/retrieval/starter/queries.jsonl")
 DEFAULT_TOP_K = 5
 DEFAULT_TIMEOUT_SECONDS = 90
 DEFAULT_DATASET_NAME = "starter"
+COMPARE_RUNTIME_FIELDS = (
+    "embedding_provider",
+    "embedding_model_name",
+    "embedding_dimensions",
+    "embedding_device",
+    "memory_qdrant_collection",
+)
+COMPARE_DATASET_FIELDS = (
+    ("dataset.name", ("dataset", "name")),
+    ("dataset.corpus_path", ("dataset", "corpus_path")),
+    ("dataset.queries_path", ("dataset", "queries_path")),
+    ("top_k", ("top_k",)),
+)
 
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -180,6 +193,200 @@ def summarize_results(result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _nested_get(payload: dict[str, Any], path: tuple[str, ...]) -> Any:
+    current: Any = payload
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def _relevant_rank(query_result: dict[str, Any]) -> int | None:
+    relevant_ids = set(query_result.get("relevant_ids", []))
+    for index, result_id in enumerate(query_result.get("returned_ids", []), start=1):
+        if result_id in relevant_ids:
+            return index
+    return None
+
+
+def compare_query_results(
+    baseline_query: dict[str, Any],
+    candidate_query: dict[str, Any],
+) -> list[str]:
+    changes: list[str] = []
+
+    baseline_expected_empty_pass = baseline_query.get("expected_empty_pass", False)
+    candidate_expected_empty_pass = candidate_query.get("expected_empty_pass", False)
+    if baseline_expected_empty_pass != candidate_expected_empty_pass:
+        changes.append(
+            "expected-empty "
+            f'{"passed" if baseline_expected_empty_pass else "failed"} -> '
+            f'{"passed" if candidate_expected_empty_pass else "failed"}'
+        )
+
+    baseline_rank = _relevant_rank(baseline_query)
+    candidate_rank = _relevant_rank(candidate_query)
+    if baseline_rank != candidate_rank:
+        if baseline_rank is None:
+            changes.append(f"relevant hit entered top-k at rank {candidate_rank}")
+        elif candidate_rank is None:
+            changes.append(f"relevant hit dropped out of top-k from rank {baseline_rank}")
+        else:
+            changes.append(f"relevant hit rank {baseline_rank} -> {candidate_rank}")
+
+    baseline_missing = baseline_query.get("missing_ids", [])
+    candidate_missing = candidate_query.get("missing_ids", [])
+    if baseline_missing != candidate_missing:
+        changes.append(f"missing ids {baseline_missing} -> {candidate_missing}")
+
+    baseline_unexpected = baseline_query.get("unexpected_ids", [])
+    candidate_unexpected = candidate_query.get("unexpected_ids", [])
+    if baseline_unexpected != candidate_unexpected:
+        changes.append(
+            "unexpected ids "
+            f'{len(baseline_unexpected)} -> {len(candidate_unexpected)} '
+            f"({baseline_unexpected} -> {candidate_unexpected})"
+        )
+
+    baseline_returned = baseline_query.get("returned_ids", [])
+    candidate_returned = candidate_query.get("returned_ids", [])
+    if baseline_returned != candidate_returned and baseline_rank == candidate_rank and baseline_unexpected == candidate_unexpected:
+        changes.append(f"returned ids {baseline_returned} -> {candidate_returned}")
+
+    return changes
+
+
+def compare_results(baseline: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
+    compatibility: list[dict[str, Any]] = []
+    for label, path in COMPARE_DATASET_FIELDS:
+        compatibility.append(
+            {
+                "field": label,
+                "baseline": _nested_get(baseline, path),
+                "candidate": _nested_get(candidate, path),
+                "matches": _nested_get(baseline, path) == _nested_get(candidate, path),
+            }
+        )
+    for field in COMPARE_RUNTIME_FIELDS:
+        compatibility.append(
+            {
+                "field": f"runtime.{field}",
+                "baseline": baseline.get("runtime", {}).get(field),
+                "candidate": candidate.get("runtime", {}).get(field),
+                "matches": baseline.get("runtime", {}).get(field) == candidate.get("runtime", {}).get(field),
+            }
+        )
+
+    metric_names = sorted(set(baseline.get("metrics", {})) | set(candidate.get("metrics", {})))
+    metrics: list[dict[str, Any]] = []
+    for name in metric_names:
+        baseline_metric = baseline.get("metrics", {}).get(name, {})
+        candidate_metric = candidate.get("metrics", {}).get(name, {})
+        baseline_value = baseline_metric.get("value")
+        candidate_value = candidate_metric.get("value")
+        delta = None
+        if isinstance(baseline_value, (int, float)) and isinstance(candidate_value, (int, float)):
+            delta = candidate_value - baseline_value
+        metrics.append(
+            {
+                "name": name,
+                "baseline": baseline_metric,
+                "candidate": candidate_metric,
+                "delta": delta,
+            }
+        )
+
+    baseline_queries = {item["query_id"]: item for item in baseline.get("queries", [])}
+    candidate_queries = {item["query_id"]: item for item in candidate.get("queries", [])}
+    changed_queries: list[dict[str, Any]] = []
+    for query_id in sorted(set(baseline_queries) | set(candidate_queries)):
+        baseline_query = baseline_queries.get(query_id)
+        candidate_query = candidate_queries.get(query_id)
+        if baseline_query is None:
+            changed_queries.append(
+                {"query_id": query_id, "summary": ["query added in candidate"], "baseline": None, "candidate": candidate_query}
+            )
+            continue
+        if candidate_query is None:
+            changed_queries.append(
+                {"query_id": query_id, "summary": ["query missing in candidate"], "baseline": baseline_query, "candidate": None}
+            )
+            continue
+        summary = compare_query_results(baseline_query, candidate_query)
+        if summary:
+            changed_queries.append(
+                {
+                    "query_id": query_id,
+                    "query": candidate_query.get("query", baseline_query.get("query", "")),
+                    "summary": summary,
+                    "baseline": baseline_query,
+                    "candidate": candidate_query,
+                }
+            )
+
+    return {
+        "baseline": {
+            "dataset": baseline.get("dataset", {}).get("name"),
+            "path": "",
+        },
+        "candidate": {
+            "dataset": candidate.get("dataset", {}).get("name"),
+            "path": "",
+        },
+        "compatibility": compatibility,
+        "metrics": metrics,
+        "changed_queries": changed_queries,
+    }
+
+
+def summarize_comparison(comparison: dict[str, Any]) -> str:
+    lines = [
+        "Retrieval Eval Comparison",
+        f'- Baseline: {comparison["baseline"]["path"]}',
+        f'- Candidate: {comparison["candidate"]["path"]}',
+        "",
+        "Compatibility:",
+    ]
+    for item in comparison["compatibility"]:
+        if item["matches"]:
+            lines.append(f'- {item["field"]}: match ({item["baseline"]})')
+        else:
+            lines.append(
+                f'- {item["field"]}: differs '
+                f'(baseline={item["baseline"]}, candidate={item["candidate"]})'
+            )
+
+    lines.append("")
+    lines.append("Metric deltas:")
+    for item in comparison["metrics"]:
+        baseline_value = item["baseline"].get("value")
+        candidate_value = item["candidate"].get("value")
+        if isinstance(item["delta"], (int, float)):
+            delta_text = f"{item['delta']:+.3f}"
+        else:
+            delta_text = "n/a"
+        if isinstance(baseline_value, (int, float)) and isinstance(candidate_value, (int, float)):
+            lines.append(
+                f'- {item["name"]}: {baseline_value:.3f} -> {candidate_value:.3f} ({delta_text})'
+            )
+        else:
+            lines.append(f'- {item["name"]}: unavailable')
+
+    lines.append("")
+    lines.append("Changed queries:")
+    if not comparison["changed_queries"]:
+        lines.append("- none")
+    else:
+        for item in comparison["changed_queries"]:
+            query_label = item.get("query")
+            if query_label:
+                lines.append(f'- {item["query_id"]} "{query_label}": ' + "; ".join(item["summary"]))
+            else:
+                lines.append(f'- {item["query_id"]}: ' + "; ".join(item["summary"]))
+    return "\n".join(lines)
+
+
 def build_runtime_metadata() -> dict[str, str]:
     return {
         "embedding_provider": os.environ.get("EMBEDDING_PROVIDER", "unknown"),
@@ -268,6 +475,16 @@ def build_parser() -> argparse.ArgumentParser:
     summary_parser = subparsers.add_parser("summary", help="Render a human-readable summary from a JSON result file.")
     summary_parser.add_argument("--input", type=Path, required=True)
 
+    compare_parser = subparsers.add_parser("compare", help="Compare two saved retrieval-eval JSON result files.")
+    compare_parser.add_argument("--baseline", type=Path, required=True)
+    compare_parser.add_argument("--candidate", type=Path, required=True)
+    compare_parser.add_argument(
+        "--output-format",
+        choices=("json", "summary"),
+        default="summary",
+        help="Choose JSON for machine-readable output or summary for human-readable output.",
+    )
+
     return parser
 
 
@@ -278,6 +495,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "summary":
         result = json.loads(args.input.read_text(encoding="utf-8"))
         print(summarize_results(result))
+        return 0
+
+    if args.command == "compare":
+        baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
+        candidate = json.loads(args.candidate.read_text(encoding="utf-8"))
+        comparison = compare_results(baseline, candidate)
+        comparison["baseline"]["path"] = str(args.baseline)
+        comparison["candidate"]["path"] = str(args.candidate)
+        if args.output_format == "json":
+            print(json.dumps(comparison, indent=2))
+        else:
+            print(summarize_comparison(comparison))
         return 0
 
     if args.command in (None, "run"):

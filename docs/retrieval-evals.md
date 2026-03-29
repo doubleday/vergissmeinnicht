@@ -70,7 +70,7 @@ The first eval strategy for this repository should stay deliberately small:
 1. Keep unit and integration tests focused on functional correctness and live-stack behavior.
 2. Add a separate retrieval-eval workflow for search quality.
 3. Use a small frozen offline dataset rather than trying to judge relevance inside normal tests.
-4. Review changed queries manually when retrieval behavior shifts.
+4. Review changed queries manually when search behavior shifts.
 
 The goal of this first slice is not advanced ranking science. The goal is to make future retrieval changes easier to compare and discuss.
 
@@ -131,7 +131,7 @@ Why this mix:
 - Recall@5 shows whether relevant memories are being found at all.
 - MRR@5 shows whether the first relevant result is near the top.
 - Expected-empty success rate exposes clearly unrelated queries that still return a memory.
-- Precision@5 exposes irrelevant tail results even when a relevant item still ranks first.
+- Precision@5 exposes irrelevant tail results even when a relevant id still ranks first.
 
 Metrics to defer for now:
 
@@ -236,6 +236,7 @@ Available local lifecycle commands:
 ./scripts/run_retrieval_evals.sh start
 ./scripts/run_retrieval_evals.sh reset
 ./scripts/run_retrieval_evals.sh run
+./scripts/run_retrieval_evals.sh compare artifacts/retrieval-evals/baseline.json artifacts/retrieval-evals/candidate.json
 ./scripts/run_retrieval_evals.sh cleanup
 ```
 
@@ -243,8 +244,25 @@ Recommended usage:
 
 - `setup` once before the first run, or again after Dockerfile or dependency changes
 - `run` for ordinary retrieval-eval iterations
+- `compare` to review metric and query-level changes between two saved eval artifacts
 - `reset` when you want a clean isolated eval data state without rebuilding images
 - `cleanup` when you want to remove the reusable eval runtime entirely
+
+The comparison workflow is intentionally artifact-based rather than runner-based. Compare saved JSON outputs after a retrieval-setting, embedder, or runtime change:
+
+```bash
+./scripts/run_retrieval_evals.sh compare \
+  artifacts/retrieval-evals/retrieval-eval-baseline.json \
+  artifacts/retrieval-evals/retrieval-eval-candidate.json
+```
+
+The compare output should include:
+
+- compatibility checks for dataset and runtime provenance
+- metric deltas for the existing retrieval metric set
+- only the queries whose review-relevant behavior changed
+
+This is the intended replacement for ad hoc JSON diffing when reviewing retrieval experiments.
 
 For higher-signal local runs, the stack can be started with:
 
@@ -257,44 +275,3 @@ MEMORY_QDRANT_COLLECTION=memories_retrieval_eval_bge_small
 ```
 
 When switching provider, model, or vector dimensions, use a clean Qdrant collection or a separate collection name. Reusing a collection populated by another embedding runtime is not a supported evaluation baseline.
-
-Recommended interpretation:
-
-- `deterministic-local` runs are useful for hermetic regression checks and eval-workflow validation.
-- Real-provider runs are the better signal for retrieval-quality iteration.
-- Compare runs only when the saved runtime metadata matches the provider and collection setup you intended to evaluate.
-
-The reusable retrieval-eval runtime remains separate from the default local stack through its own Compose file, fixed project name, dedicated volumes, and eval-specific Qdrant collection. Reset the eval runtime when you want fresh retrieval state. Rebuild only when the runtime definition or dependencies change.
-
-## What Not To Do
-
-- Do not treat exact semantic ranking order as a stable unit-test contract.
-- Do not assume one or two hand-written example queries are enough to measure quality.
-- Do not mix relevance judgments into normal integration tests unless the expectation is very narrow and deterministic.
-- Do not treat scores from the deterministic placeholder embedder as strong evidence about real semantic quality.
-
-## Recommended Scope For A First Change
-
-If this work is formalized as an OpenSpec change, the first slice should stay narrow:
-
-- define the frozen dataset shape
-- define the first metric set
-- define the result-review workflow
-- add a manual eval entry point later
-- explicitly document that early scores are provisional until a real embedding provider exists
-
-That first slice should not include:
-
-- reranking
-- hybrid retrieval redesign
-- production retrieval tuning
-- CI quality gates
-- graded relevance labels
-- model comparison automation
-
-## Future Questions
-
-- What corpus size is enough to catch regressions without creating heavy maintenance?
-- Should the project use binary relevance labels or graded relevance?
-- When should evals run: manually, in CI, or only before larger search changes?
-- How should model or embedding-version changes be compared over time?

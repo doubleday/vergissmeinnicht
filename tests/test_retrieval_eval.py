@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
-from memory_api.evals.retrieval_eval import build_runtime_metadata, compute_metrics, load_jsonl, summarize_results
+from memory_api.evals.retrieval_eval import (
+    build_runtime_metadata,
+    compare_results,
+    compute_metrics,
+    load_jsonl,
+    summarize_comparison,
+    summarize_results,
+)
 
 
 def test_load_jsonl_reads_objects_in_order(tmp_path: Path) -> None:
@@ -136,3 +142,144 @@ def test_build_runtime_metadata_reads_embedding_environment(monkeypatch) -> None
         "embedding_device": "cpu",
         "memory_qdrant_collection": "memories_eval",
     }
+
+
+def test_compare_results_reports_metric_query_and_compatibility_deltas() -> None:
+    baseline = {
+        "dataset": {
+            "name": "starter",
+            "corpus_path": "evals/retrieval/starter/corpus.jsonl",
+            "queries_path": "evals/retrieval/starter/queries.jsonl",
+        },
+        "runtime": {
+            "embedding_provider": "deterministic-local",
+            "embedding_model_name": "bge",
+            "embedding_dimensions": "32",
+            "embedding_device": "cpu",
+            "memory_qdrant_collection": "memories_eval_a",
+        },
+        "top_k": 5,
+        "metrics": {
+            "hit@1": {"value": 0.5},
+            "expected-empty": {"value": 0.0},
+        },
+        "queries": [
+            {
+                "query_id": "q1",
+                "query": "brief replies",
+                "relevant_ids": ["m1"],
+                "returned_ids": ["m1", "m2"],
+                "missing_ids": [],
+                "unexpected_ids": ["m2"],
+                "expected_empty": False,
+                "expected_empty_pass": False,
+            },
+            {
+                "query_id": "q2",
+                "query": "weather tomorrow",
+                "relevant_ids": [],
+                "returned_ids": ["m3"],
+                "missing_ids": [],
+                "unexpected_ids": ["m3"],
+                "expected_empty": True,
+                "expected_empty_pass": False,
+            },
+        ],
+    }
+    candidate = {
+        "dataset": {
+            "name": "starter",
+            "corpus_path": "evals/retrieval/starter/corpus.jsonl",
+            "queries_path": "evals/retrieval/starter/queries.jsonl",
+        },
+        "runtime": {
+            "embedding_provider": "deterministic-local",
+            "embedding_model_name": "bge",
+            "embedding_dimensions": "32",
+            "embedding_device": "cpu",
+            "memory_qdrant_collection": "memories_eval_b",
+        },
+        "top_k": 5,
+        "metrics": {
+            "hit@1": {"value": 1.0},
+            "expected-empty": {"value": 1.0},
+        },
+        "queries": [
+            {
+                "query_id": "q1",
+                "query": "brief replies",
+                "relevant_ids": ["m1"],
+                "returned_ids": ["m2", "m1"],
+                "missing_ids": [],
+                "unexpected_ids": ["m2"],
+                "expected_empty": False,
+                "expected_empty_pass": False,
+            },
+            {
+                "query_id": "q2",
+                "query": "weather tomorrow",
+                "relevant_ids": [],
+                "returned_ids": [],
+                "missing_ids": [],
+                "unexpected_ids": [],
+                "expected_empty": True,
+                "expected_empty_pass": True,
+            },
+        ],
+    }
+
+    comparison = compare_results(baseline, candidate)
+
+    assert any(
+        item["field"] == "runtime.memory_qdrant_collection" and item["matches"] is False
+        for item in comparison["compatibility"]
+    )
+    assert any(
+        item["name"] == "hit@1" and item["delta"] == 0.5
+        for item in comparison["metrics"]
+    )
+    assert comparison["changed_queries"][0]["query_id"] == "q1"
+    assert "relevant hit rank 1 -> 2" in comparison["changed_queries"][0]["summary"]
+    assert any(
+        item["query_id"] == "q2" and "expected-empty failed -> passed" in item["summary"]
+        for item in comparison["changed_queries"]
+    )
+
+
+def test_summarize_comparison_renders_changed_queries_only() -> None:
+    comparison = {
+        "baseline": {"path": "baseline.json"},
+        "candidate": {"path": "candidate.json"},
+        "compatibility": [
+            {"field": "dataset.name", "baseline": "starter", "candidate": "starter", "matches": True},
+            {
+                "field": "runtime.memory_qdrant_collection",
+                "baseline": "a",
+                "candidate": "b",
+                "matches": False,
+            },
+        ],
+        "metrics": [
+            {
+                "name": "hit@1",
+                "baseline": {"value": 0.75},
+                "candidate": {"value": 0.5},
+                "delta": -0.25,
+            }
+        ],
+        "changed_queries": [
+            {
+                "query_id": "q7",
+                "query": "weather tomorrow",
+                "summary": ["expected-empty failed -> passed", "unexpected ids 5 -> 0 ([] -> [])"],
+            }
+        ],
+    }
+
+    summary = summarize_comparison(comparison)
+
+    assert "Retrieval Eval Comparison" in summary
+    assert "dataset.name: match (starter)" in summary
+    assert "runtime.memory_qdrant_collection: differs (baseline=a, candidate=b)" in summary
+    assert "hit@1: 0.750 -> 0.500 (-0.250)" in summary
+    assert 'q7 "weather tomorrow": expected-empty failed -> passed' in summary
