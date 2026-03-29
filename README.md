@@ -62,6 +62,27 @@ with MemoryApiClient(base_url="http://127.0.0.1:8000") as client:
 
 The client intentionally does not include readiness calls, retries, MCP behavior, or CLI-oriented helper methods.
 
+## CLI
+
+The next Milestone D adapter slice is a thin CLI over the shared Python client. It exposes the same four memory operations for manual inspection and debugging and does not add new backend behavior.
+
+```bash
+memory-cli create \
+  --kind rule \
+  --scope project \
+  --namespace demo \
+  --title "Keep responses concise" \
+  --content "Prefer direct answers unless more detail is requested." \
+  --tag style \
+  --source-type manual
+
+memory-cli search --query "direct answers" --namespace demo --scope project
+memory-cli get <memory-id>
+memory-cli archive <memory-id>
+```
+
+The CLI prints structured JSON to stdout, uses the shared client for all four operations, and supports `--base-url` plus `--timeout` on each command.
+
 ## Verification
 
 Run the fast unit tests:

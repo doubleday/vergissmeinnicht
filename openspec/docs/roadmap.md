@@ -62,6 +62,29 @@ Success criteria:
 - Claude, Codex, and local automation all talk to the same primitives
 - Memory behavior is consistent regardless of the client protocol
 
+## Current Priority - Retrieval Evals And Quality Iteration
+
+Outcome: retrieval behavior is measurable, trustworthy enough to improve deliberately, and strong enough to justify deeper tool integrations.
+
+Why this is next:
+
+- The current shared-client and CLI adapter work is enough to exercise the backend manually.
+- The next highest-risk question is retrieval quality rather than adapter reach.
+- MCP and broader tool integration should follow only after evals make it clear how well the system performs and which search behaviors need improvement.
+
+Immediate priorities:
+
+- Expand retrieval eval coverage beyond the starter workflow.
+- Add explicit negative-query and false-positive checks so unrelated queries can be measured, not guessed.
+- Compare retrieval behavior across embedding runtimes and search settings.
+- Use eval results to drive focused search-quality changes such as thresholding, fallback rules, and ranking adjustments.
+
+Exit criteria before resuming broader adapter work:
+
+- Retrieval evals capture both expected matches and expected non-matches.
+- The team can explain current failure modes with evidence from eval runs.
+- Search-quality changes can be judged against repeatable metrics rather than anecdotal CLI tests.
+
 ## Deferred Until After Real Usage
 
 - Automatic memory extraction from conversations
@@ -72,6 +95,7 @@ Success criteria:
 ## Testing And Evals
 
 - Unit and integration tests cover functional correctness, API behavior, and service wiring.
+- Retrieval evaluation is now the immediate product-quality priority and should guide the next round of search improvements before additional tool integrations.
 - Retrieval evaluation exists as a separate manual workflow and should remain outside the default unit-test and integration-test commands.
 - While the active runtime embedder is `deterministic-local`, retrieval-eval results are useful for workflow validation and regression comparison but should not be treated as strong evidence of real semantic quality.
-- The next meaningful retrieval-quality milestone is support for a real embedding provider while preserving deterministic embeddings for hermetic tests and local fallback.
+- The next meaningful retrieval-quality work is expanding eval coverage and using it to iterate on search behavior while preserving deterministic embeddings for hermetic tests and local fallback plus optional real-provider comparison runs.
